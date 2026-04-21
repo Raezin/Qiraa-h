@@ -1,0 +1,48 @@
+src/
+├── components/
+│   ├── layout/
+│   │   ├── Navbar.jsx
+│   │   ├── Sidebar.jsx
+│   │   └── Footer.jsx
+│   ├── recitation/
+│   │   ├── AudioRecorder.jsx
+│   │   ├── ResultsPanel.jsx
+│   │   ├── AyatDisplay.jsx
+│   │   └── WaveformVisualizer.jsx
+│   ├── common/
+│   │   ├── LoadingSpinner.jsx
+│   │   ├── ErrorBoundary.jsx
+│   │   └── ProtectedRoute.jsx
+│   └── admin/
+│       ├── UsageChart.jsx
+│       └── UserTable.jsx
+├── pages/
+│   ├── Landing.jsx
+│   ├── Login.jsx
+│   ├── Signup.jsx
+│   ├── Dashboard.jsx
+│   ├── RecitationStudio.jsx
+│   ├── History.jsx
+│   ├── Subscription.jsx
+│   ├── Profile.jsx
+│   └── admin/
+│       └── AdminDashboard.jsx
+├── hooks/
+│   ├── useAudioRecorder.js
+│   ├── useSubscription.js
+│   └── useRecitationSession.js
+├── services/
+│   ├── firebase.js
+│   ├── whisperApi.js
+│   ├── fastspeech2Api.js
+│   └── gradingEngine.js
+├── context/
+│   ├── AuthContext.jsx
+│   └── SubscriptionContext.jsx
+├── theme/
+│   └── theme.js
+├── utils/
+│   ├── arabicTextUtils.js
+│   └── diffHighlighter.js
+├── App.jsx
+└── main.jsx

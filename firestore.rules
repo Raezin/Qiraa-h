@@ -1,0 +1,98 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return request.auth != null && request.auth.token.role == 'admin';
+    }
+    
+    function isOwnUser(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // ==================== USERS COLLECTION ====================
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwnUser(userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwnUser(userId);
+      allow update: if isAuthenticated() && (isOwnUser(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+    
+    // ==================== SUBSCRIPTIONS COLLECTION ====================
+    match /subscriptions/{subscriptionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if false;
+    }
+    
+    // ==================== EVALUATIONS COLLECTION ====================
+    match /evaluations/{evaluationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    
+    // ==================== REVIEWS COLLECTION ====================
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+    
+    // ==================== CREDIT TRANSACTIONS COLLECTION ====================
+    match /creditTransactions/{transactionId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+    
+    // ==================== DAILY USAGE COLLECTION ====================
+    match /dailyUsage/{usageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if false;
+    }
+    
+    // ==================== USER PROGRESS COLLECTION ====================
+    match /userProgress/{progressId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+    
+    // ==================== AYAHS COLLECTION ====================
+    match /ayahs/{ayahId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // ==================== PRONUNCIATION AUDIOS COLLECTION ====================
+    match /pronunciationAudios/{audioId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // ==================== ADMIN STATS COLLECTION ====================
+    match /adminStats/{statId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+    
+    // ==================== NOTIFICATIONS COLLECTION ====================
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+  }
+}

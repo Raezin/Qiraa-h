@@ -1,0 +1,27 @@
+firestore/
+├── users/{userId}
+│   ├── userId, name, email, role, credits, subscriptionId, createdAt, lastLogin
+│
+├── subscriptions/{subscriptionId}
+│   ├── subscriptionId, userId, type, creditsPerDay, price, startDate, expiryDate, status
+│
+├── evaluations/{evaluationId}
+│   ├── evaluationId, userId, ayahNo, surah, transcription, score, creditsUsed, createdAt
+│
+├── reviews/{reviewId}
+│   ├── reviewId, userId, rating, comment, createdAt, updatedAt
+│
+├── creditTransactions/{transactionId}
+│   ├── transactionId, userId, amount, type, description, balanceAfter, createdAt
+│
+├── dailyUsage/{userId_date}
+│   ├── userId, date, recitationsCount, creditsUsed, evaluationsCount
+│
+├── userProgress/{userId_surah_ayahNo}
+│   ├── userId, surah, ayahNo, previousScores, bestScore, attemptsCount
+│
+├── ayahs/{ayahId}
+│   ├── surah, ayahNo, text, translation, transliteration
+│
+└── pronunciationAudios/{audioId}
+    ├── ayahId, reciter, audioUrl, createdAt, downloads
