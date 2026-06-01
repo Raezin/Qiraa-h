@@ -24,6 +24,7 @@ import {
   DialogContent,
   DialogActions,
   TextField,
+  InputAdornment,
   Alert,
   LinearProgress,
 } from '@mui/material'
@@ -32,9 +33,7 @@ import {
   Star,
   Rocket,
   School,
-  EmojiEvents,
   Security,
-  Speed,
   Support,
   Favorite,
   CreditCard,
@@ -44,12 +43,13 @@ import {
 import { motion } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
 import { useSubscription } from '../context/SubscriptionContext'
+import toast from 'react-hot-toast'
 
 const Subscription = () => {
   const navigate = useNavigate()
   const theme = useTheme()
   const { user } = useAuth()
-  const { subscribe, subscription: currentSubscription, loading } = useSubscription()
+  const { subscribe, subscription: currentSubscription, loading, dailyUsage } = useSubscription()
   
   const [selectedPlan, setSelectedPlan] = useState(null)
   const [billingCycle, setBillingCycle] = useState('monthly')
@@ -94,7 +94,7 @@ const Subscription = () => {
       period: 'month',
       description: 'For serious learners',
       features: [
-        'Unlimited recitations',
+        '100 recitations per day',
         'Advanced AI feedback',
         'Unlimited history',
         'Priority support',
@@ -116,6 +116,7 @@ const Subscription = () => {
       period: 'month',
       description: 'For the whole family',
       features: [
+        '200 recitations per day',
         'All Pro features',
         'Up to 5 family members',
         'Family dashboard',
@@ -140,7 +141,6 @@ const Subscription = () => {
 
   const handleSubscribe = (plan) => {
     if (plan.id === 'free') {
-      // Free plan - just navigate to dashboard
       navigate('/dashboard')
     } else {
       setSelectedPlan(plan)
@@ -149,7 +149,7 @@ const Subscription = () => {
   }
 
   const handlePaymentSubmit = async () => {
-    // Dummy payment validation
+    // Validate payment details
     if (!paymentDetails.cardNumber || !paymentDetails.cardName || !paymentDetails.expiryDate || !paymentDetails.cvv) {
       setPaymentError('Please fill in all payment details')
       return
@@ -160,21 +160,33 @@ const Subscription = () => {
     
     // Simulate payment processing
     setTimeout(async () => {
-      const result = await subscribe(selectedPlan.id)
-      if (result.success) {
-        setPaymentDialogOpen(false)
-        // Reset payment form
-        setPaymentDetails({
-          cardNumber: '',
-          cardName: '',
-          expiryDate: '',
-          cvv: '',
-        })
-        // Show success message (you can add toast notification here)
-      } else {
+      try {
+        // Call the subscribe function from context
+        const result = await subscribe(selectedPlan.id)
+        
+        if (result.success) {
+          toast.success(`Successfully upgraded to ${selectedPlan.name} plan!`)
+          setPaymentDialogOpen(false)
+          setPaymentDetails({
+            cardNumber: '',
+            cardName: '',
+            expiryDate: '',
+            cvv: '',
+          })
+          // Navigate to dashboard after successful subscription
+          setTimeout(() => {
+            navigate('/dashboard')
+          }, 1500)
+        } else {
+          setPaymentError(result.error || 'Payment failed. Please try again.')
+          toast.error(result.error || 'Subscription failed')
+        }
+      } catch (error) {
         setPaymentError('Payment failed. Please try again.')
+        toast.error('Subscription failed')
+      } finally {
+        setPaymentProcessing(false)
       }
-      setPaymentProcessing(false)
     }, 2000)
   }
 
@@ -188,9 +200,8 @@ const Subscription = () => {
     }
     if (parts.length) {
       return parts.join(' ')
-    } else {
-      return value
     }
+    return value
   }
 
   const formatExpiryDate = (value) => {
@@ -199,6 +210,14 @@ const Subscription = () => {
       return v.substring(0, 2) + (v.length > 2 ? '/' + v.substring(2, 4) : '')
     }
     return v
+  }
+
+  // Check if user already has a plan
+  const isCurrentPlan = (planId) => {
+    if (planId === 'free') {
+      return !currentSubscription && (!dailyUsage || dailyUsage.subscriptionType === 'free')
+    }
+    return currentSubscription?.type === planId || dailyUsage?.subscriptionType === planId
   }
 
   return (
@@ -212,17 +231,24 @@ const Subscription = () => {
       <Container maxWidth="lg">
         {/* Header */}
         <Box textAlign="center" mb={6}>
-          <Chip
-            label="Pricing Plans"
-            color="primary"
-            sx={{ mb: 2, py: 2, px: 2 }}
-          />
+          <Chip label="Pricing Plans" color="primary" sx={{ mb: 2, py: 2, px: 2 }} />
           <Typography variant="h2" gutterBottom fontWeight="bold">
             Choose Your Perfect Plan
           </Typography>
           <Typography variant="h6" color="text.secondary" sx={{ maxWidth: 600, mx: 'auto' }}>
             Start for free and upgrade as you grow. All plans include access to our AI technology.
           </Typography>
+
+          {/* Current Plan Info */}
+          {currentSubscription && (
+            <Box sx={{ mt: 2 }}>
+              <Chip 
+                label={`Current Plan: ${currentSubscription.type?.charAt(0).toUpperCase() + currentSubscription.type?.slice(1)}`}
+                color="success"
+                variant="outlined"
+              />
+            </Box>
+          )}
 
           {/* Billing Toggle */}
           <Box sx={{ mt: 4, display: 'flex', justifyContent: 'center' }}>
@@ -265,9 +291,8 @@ const Subscription = () => {
         {/* Pricing Cards */}
         <Grid container spacing={4} alignItems="flex-start">
           {plans.map((plan, index) => {
-            const isCurrentPlan = currentSubscription?.plan?.name === plan.name
+            const currentPlan = isCurrentPlan(plan.id)
             const price = billingCycle === 'monthly' ? plan.price.monthly : plan.price.yearly
-            const yearlyPrice = billingCycle === 'yearly' ? plan.price.yearly / 12 : plan.price.monthly
             
             return (
               <Grid item size={{ xs: 12, md: 4 }} key={plan.id}>
@@ -293,7 +318,6 @@ const Subscription = () => {
                     {plan.recommended && (
                       <Chip
                         label="Most Popular"
-                        color="primary"
                         sx={{
                           position: 'absolute',
                           top: -12,
@@ -304,7 +328,7 @@ const Subscription = () => {
                       />
                     )}
                     
-                    {isCurrentPlan && (
+                    {currentPlan && (
                       <Chip
                         label="Current Plan"
                         sx={{
@@ -318,7 +342,6 @@ const Subscription = () => {
                     )}
 
                     <CardContent sx={{ p: 4 }}>
-                      {/* Plan Icon */}
                       <Box
                         sx={{
                           width: 80,
@@ -334,7 +357,6 @@ const Subscription = () => {
                         {plan.icon}
                       </Box>
 
-                      {/* Plan Name */}
                       <Typography variant="h4" gutterBottom fontWeight="bold">
                         {plan.name}
                       </Typography>
@@ -342,7 +364,6 @@ const Subscription = () => {
                         {plan.description}
                       </Typography>
 
-                      {/* Price */}
                       <Box sx={{ mb: 3 }}>
                         <Typography variant="h2" component="span" fontWeight="bold" sx={{ color: plan.color }}>
                           ${billingCycle === 'monthly' ? price : (price / 12).toFixed(2)}
@@ -362,17 +383,13 @@ const Subscription = () => {
                         )}
                       </Box>
 
-                      {/* Features List */}
                       <List sx={{ mb: 3 }}>
                         {plan.features.map((feature, idx) => (
                           <ListItem key={idx} sx={{ px: 0, py: 0.5 }}>
                             <ListItemIcon sx={{ minWidth: 32 }}>
                               <CheckCircle sx={{ color: plan.color, fontSize: 20 }} />
                             </ListItemIcon>
-                            <ListItemText 
-                              primary={feature}
-                              primaryTypographyProps={{ variant: 'body2' }}
-                            />
+                            <ListItemText primary={feature} primaryTypographyProps={{ variant: 'body2' }} />
                           </ListItem>
                         ))}
                         
@@ -381,25 +398,21 @@ const Subscription = () => {
                             <ListItemIcon sx={{ minWidth: 32 }}>
                               <CheckCircle sx={{ color: '#64748b', fontSize: 20 }} />
                             </ListItemIcon>
-                            <ListItemText 
-                              primary={limitation}
-                              primaryTypographyProps={{ variant: 'body2' }}
-                            />
+                            <ListItemText primary={limitation} primaryTypographyProps={{ variant: 'body2' }} />
                           </ListItem>
                         ))}
                       </List>
 
-                      {/* Action Button */}
                       <Button
                         fullWidth
-                        variant={isCurrentPlan ? 'outlined' : 'contained'}
+                        variant={currentPlan ? 'outlined' : 'contained'}
                         size="large"
-                        disabled={isCurrentPlan || loading}
+                        disabled={currentPlan || loading}
                         onClick={() => handleSubscribe(plan)}
                         sx={{
                           borderRadius: '12px',
                           py: 1.5,
-                          ...(!isCurrentPlan && {
+                          ...(!currentPlan && {
                             background: `linear-gradient(135deg, ${plan.color} 0%, ${alpha(plan.color, 0.8)} 100%)`,
                           }),
                           '&:hover': {
@@ -408,7 +421,7 @@ const Subscription = () => {
                           },
                         }}
                       >
-                        {isCurrentPlan ? 'Current Plan' : plan.buttonText}
+                        {currentPlan ? 'Current Plan' : plan.buttonText}
                       </Button>
                     </CardContent>
                   </Card>
@@ -442,7 +455,7 @@ const Subscription = () => {
                 </thead>
                 <tbody>
                   {[
-                    { feature: 'Daily Recitations', free: '5/day', pro: 'Unlimited', family: 'Unlimited' },
+                    { feature: 'Daily Recitations', free: '5/day', pro: '100/day', family: '200/day' },
                     { feature: 'AI Feedback Quality', free: 'Basic', pro: 'Advanced', family: 'Advanced' },
                     { feature: 'History Access', free: '7 days', pro: 'Unlimited', family: 'Unlimited' },
                     { feature: 'Download Reports', free: '❌', pro: '✅', family: '✅' },
@@ -450,20 +463,12 @@ const Subscription = () => {
                     { feature: 'Family Members', free: '1', pro: '1', family: '5' },
                     { feature: 'Priority Support', free: '❌', pro: '✅', family: '✅' },
                     { feature: 'Progress Analytics', free: 'Basic', pro: 'Advanced', family: 'Advanced' },
-                    { feature: 'Custom Exercises', free: '❌', pro: '✅', family: '✅' },
-                    { feature: 'Parental Controls', free: '❌', pro: '❌', family: '✅' },
                   ].map((row, idx) => (
                     <tr key={idx} style={{ borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
                       <td style={{ padding: '16px', fontWeight: 500 }}>{row.feature}</td>
-                      <td style={{ padding: '16px', textAlign: 'center', color: row.free === '✅' ? '#22c55e' : 'inherit' }}>
-                        {row.free}
-                      </td>
-                      <td style={{ padding: '16px', textAlign: 'center', color: row.pro === '✅' ? '#22c55e' : 'inherit' }}>
-                        {row.pro}
-                      </td>
-                      <td style={{ padding: '16px', textAlign: 'center', color: row.family === '✅' ? '#22c55e' : 'inherit' }}>
-                        {row.family}
-                      </td>
+                      <td style={{ padding: '16px', textAlign: 'center', color: row.free === '✅' ? '#22c55e' : 'inherit' }}>{row.free}</td>
+                      <td style={{ padding: '16px', textAlign: 'center', color: row.pro === '✅' ? '#22c55e' : 'inherit' }}>{row.pro}</td>
+                      <td style={{ padding: '16px', textAlign: 'center', color: row.family === '✅' ? '#22c55e' : 'inherit' }}>{row.family}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -481,48 +486,32 @@ const Subscription = () => {
             <Grid item size={{ xs: 12, md: 6 }}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight="bold">
-                    Can I cancel my subscription anytime?
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Yes, you can cancel your subscription at any time. You'll continue to have access until the end of your billing period.
-                  </Typography>
+                  <Typography variant="h6" gutterBottom fontWeight="bold">Can I cancel my subscription anytime?</Typography>
+                  <Typography variant="body2" color="text.secondary">Yes, you can cancel your subscription at any time. You'll continue to have access until the end of your billing period.</Typography>
                 </CardContent>
               </Card>
             </Grid>
             <Grid item size={{ xs: 12, md: 6 }}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight="bold">
-                    Is there a free trial?
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Yes, all paid plans come with a 7-day free trial. No credit card required to start.
-                  </Typography>
+                  <Typography variant="h6" gutterBottom fontWeight="bold">Is there a free trial?</Typography>
+                  <Typography variant="body2" color="text.secondary">Yes, all paid plans come with a 7-day free trial. No credit card required to start.</Typography>
                 </CardContent>
               </Card>
             </Grid>
             <Grid item size={{ xs: 12, md: 6 }}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight="bold">
-                    What payment methods do you accept?
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    We accept all major credit cards (Visa, MasterCard, American Express) and PayPal.
-                  </Typography>
+                  <Typography variant="h6" gutterBottom fontWeight="bold">What payment methods do you accept?</Typography>
+                  <Typography variant="body2" color="text.secondary">We accept all major credit cards (Visa, MasterCard, American Express).</Typography>
                 </CardContent>
               </Card>
             </Grid>
             <Grid item size={{ xs: 12, md: 6 }}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight="bold">
-                    Can I switch plans later?
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Absolutely! You can upgrade or downgrade your plan at any time from your account settings.
-                  </Typography>
+                  <Typography variant="h6" gutterBottom fontWeight="bold">Can I switch plans later?</Typography>
+                  <Typography variant="body2" color="text.secondary">Absolutely! You can upgrade or downgrade your plan at any time from your account settings.</Typography>
                 </CardContent>
               </Card>
             </Grid>
@@ -572,9 +561,7 @@ const Subscription = () => {
           
           <Stack spacing={3} sx={{ mt: 2 }}>
             <Box sx={{ p: 2, bgcolor: alpha('#22c55e', 0.1), borderRadius: '12px' }}>
-              <Typography variant="body2" color="primary" fontWeight="bold">
-                Order Summary
-              </Typography>
+              <Typography variant="body2" color="primary" fontWeight="bold">Order Summary</Typography>
               <Typography variant="h6" fontWeight="bold">
                 {selectedPlan?.name} Plan - {billingCycle === 'monthly' ? 'Monthly' : 'Yearly'}
               </Typography>
@@ -586,7 +573,7 @@ const Subscription = () => {
               </Typography>
             </Box>
 
-            {/* <TextField
+            <TextField
               fullWidth
               label="Card Number"
               placeholder="1234 5678 9012 3456"
@@ -599,7 +586,7 @@ const Subscription = () => {
                   </InputAdornment>
                 ),
               }}
-            /> */}
+            />
 
             <TextField
               fullWidth

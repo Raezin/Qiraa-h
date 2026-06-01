@@ -15,13 +15,11 @@ import {
   Stack,
   Divider,
   TextField,
-  Autocomplete,
   Paper,
   CircularProgress,
   useTheme,
   alpha,
   Fade,
-  Slide,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -29,7 +27,6 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Pagination,
 } from '@mui/material'
 import {
   Mic,
@@ -48,10 +45,9 @@ import {
   RecordVoiceOver,
   ExpandMore,
   Api,
-  Warning,
   NavigateNext,
   NavigateBefore,
-  Search,
+  Assessment,
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
@@ -61,8 +57,12 @@ import {
   saveEvaluation,
 } from '../services/firebase'
 import { analyzeRecitationAudio, testConnection } from '../services/recitationApi'
-import { getAyahs, getAyahByNumber, getSurahs } from '../services/quranApi'
+import { getAyahByNumber, getSurahs } from '../services/quranApi'
 import toast from 'react-hot-toast'
+import EvaluationResults from '../components/EvaluationResults'
+import AudioGeneratorDialog from '../components/AudioGeneratorDialog'
+
+const AYAH_CHUNK_SIZE = 5
 
 const RecitationStudio = () => {
   const navigate = useNavigate()
@@ -72,15 +72,12 @@ const RecitationStudio = () => {
   const { incrementRecitationCount } = useSubscription()
   
   // State for Quran data
-  const [selectedAyah, setSelectedAyah] = useState(null)
+  const [selectedAyahs, setSelectedAyahs] = useState([])
   const [surahs, setSurahs] = useState([])
   const [selectedSurah, setSelectedSurah] = useState(null)
-  const [currentAyahNumber, setCurrentAyahNumber] = useState(1)
+  const [chunkStartAyah, setChunkStartAyah] = useState(1)
   const [totalAyahsInSurah, setTotalAyahsInSurah] = useState(0)
   const [loadingAyahs, setLoadingAyahs] = useState(true)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [searchResults, setSearchResults] = useState([])
-  const [showSearchResults, setShowSearchResults] = useState(false)
   
   // State for recording
   const [isRecording, setIsRecording] = useState(false)
@@ -93,6 +90,8 @@ const RecitationStudio = () => {
   // State for results
   const [analysisResult, setAnalysisResult] = useState(null)
   const [rawTranscription, setRawTranscription] = useState('')
+  const [perAyahResults, setPerAyahResults] = useState([])
+  const [wordMatches, setWordMatches] = useState([])
   
   // State for limits
   const [dailyLimit, setDailyLimit] = useState({ canRecite: true, remaining: 5, limit: 5 })
@@ -100,11 +99,11 @@ const RecitationStudio = () => {
   // State for API status
   const [apiStatus, setApiStatus] = useState({ checking: true, connected: false })
   
+  // State for audio generator dialog
+  const [audioDialogOpen, setAudioDialogOpen] = useState(false)
+  
   // UI expand/collapse
   const [expandedSections, setExpandedSections] = useState({
-    feedback: true,
-    details: false,
-    suggestions: true,
     apiResponse: false,
   })
   
@@ -113,26 +112,20 @@ const RecitationStudio = () => {
   const audioChunksRef = useRef([])
   const audioRef = useRef(null)
   const timerRef = useRef(null)
+  const audioBlobRef = useRef(null)
 
   // Load data on mount
   useEffect(() => {
     fetchSurahs()
     checkUserDailyLimit()
-    
-    const params = new URLSearchParams(location.search)
-    const surah = params.get('surah')
-    const ayahNo = params.get('ayah')
-    if (surah && ayahNo) {
-      loadAyahByNumber(surah, ayahNo)
-    }
   }, [user])
 
-  // Load ayah when surah or ayah number changes
+  // Load ayahs when surah or chunk changes
   useEffect(() => {
-    if (selectedSurah && currentAyahNumber) {
-      loadAyahByNumber(selectedSurah.number, currentAyahNumber)
+    if (selectedSurah) {
+      loadAyahChunk()
     }
-  }, [selectedSurah, currentAyahNumber])
+  }, [selectedSurah, chunkStartAyah])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -171,10 +164,8 @@ const RecitationStudio = () => {
     setLoadingAyahs(true)
     try {
       const surahsList = await getSurahs()
-      console.log('Loaded surahs:', surahsList.length)
       setSurahs(surahsList)
       
-      // Default select first surah
       if (surahsList.length > 0) {
         setSelectedSurah(surahsList[0])
         setTotalAyahsInSurah(surahsList[0].numberOfAyahs || 7)
@@ -187,64 +178,52 @@ const RecitationStudio = () => {
     }
   }
 
-  const loadAyahByNumber = async (surahNumber, ayahNo) => {
-    try {
-      const ayah = await getAyahByNumber(surahNumber, ayahNo)
-      if (ayah) {
-        setSelectedAyah(ayah)
-      }
-    } catch (error) {
-      console.error('Error loading ayah:', error)
-    }
-  }
-
-  const handleSearch = async () => {
-    if (!searchTerm.trim()) {
-      toast.error('Please enter a search term')
-      return
-    }
-    
+  const loadAyahChunk = async () => {
     setLoadingAyahs(true)
     try {
-      // Search by surah name
-      const foundSurah = surahs.find(s => 
-        s.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.englishName?.toLowerCase().includes(searchTerm.toLowerCase())
-      )
+      const ayahs = []
+      const endAyah = Math.min(chunkStartAyah + AYAH_CHUNK_SIZE - 1, totalAyahsInSurah)
       
-      if (foundSurah) {
-        setSelectedSurah(foundSurah)
-        setCurrentAyahNumber(1)
-        setTotalAyahsInSurah(foundSurah.numberOfAyahs || 7)
-        setShowSearchResults(false)
-        setSearchTerm('')
-        toast.success(`Found: ${foundSurah.name}`)
-      } else {
-        toast.error('Surah not found. Try another name.')
+      for (let i = chunkStartAyah; i <= endAyah; i++) {
+        const ayah = await getAyahByNumber(selectedSurah.number, i)
+        if (ayah) {
+          ayahs.push({
+            ...ayah,
+          })
+        }
       }
+      
+      setSelectedAyahs(ayahs)
+      
     } catch (error) {
-      console.error('Search error:', error)
-      toast.error('Search failed')
+      console.error('Error loading ayah chunk:', error)
+      toast.error('Failed to load ayahs')
     } finally {
       setLoadingAyahs(false)
     }
   }
 
-  const handleNextAyah = () => {
-    if (currentAyahNumber < totalAyahsInSurah) {
-      setCurrentAyahNumber(prev => prev + 1)
+  const handleNextChunk = () => {
+    const newStart = chunkStartAyah + AYAH_CHUNK_SIZE
+    if (newStart <= totalAyahsInSurah) {
+      setChunkStartAyah(newStart)
       resetRecording()
+      setAnalysisResult(null)
+      setPerAyahResults([])
+      setWordMatches([])
     } else {
-      toast.info(`You've reached the last ayah of ${selectedSurah?.name}`)
+      toast.info(`You've reached the end of ${selectedSurah?.name}`)
     }
   }
 
-  const handlePreviousAyah = () => {
-    if (currentAyahNumber > 1) {
-      setCurrentAyahNumber(prev => prev - 1)
+  const handlePreviousChunk = () => {
+    const newStart = Math.max(1, chunkStartAyah - AYAH_CHUNK_SIZE)
+    if (newStart !== chunkStartAyah) {
+      setChunkStartAyah(newStart)
       resetRecording()
-    } else {
-      toast.info(`You're at the first ayah of ${selectedSurah?.name}`)
+      setAnalysisResult(null)
+      setPerAyahResults([])
+      setWordMatches([])
     }
   }
 
@@ -252,9 +231,12 @@ const RecitationStudio = () => {
     const surahNumber = event.target.value
     const surah = surahs.find(s => s.number === surahNumber)
     setSelectedSurah(surah)
-    setCurrentAyahNumber(1)
+    setChunkStartAyah(1)
     setTotalAyahsInSurah(surah?.numberOfAyahs || 7)
     resetRecording()
+    setAnalysisResult(null)
+    setPerAyahResults([])
+    setWordMatches([])
   }
 
   const startRecording = async () => {
@@ -270,6 +252,11 @@ const RecitationStudio = () => {
       return
     }
 
+    if (selectedAyahs.length === 0) {
+      toast.error('No ayahs loaded')
+      return
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
@@ -282,6 +269,7 @@ const RecitationStudio = () => {
       
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' })
       audioChunksRef.current = []
+      audioBlobRef.current = null
 
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -291,6 +279,7 @@ const RecitationStudio = () => {
 
       mediaRecorderRef.current.onstop = () => {
         const audioBlobData = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        audioBlobRef.current = audioBlobData
         setAudioBlob(audioBlobData)
         const url = URL.createObjectURL(audioBlobData)
         setAudioUrl(url)
@@ -304,7 +293,7 @@ const RecitationStudio = () => {
         setRecordingTime(prev => prev + 1)
       }, 1000)
       
-      toast.success('Recording started...')
+      toast.success('Recording started. Recite all ayahs continuously...')
     } catch (error) {
       console.error('Error accessing microphone:', error)
       toast.error('Unable to access microphone. Please check permissions.')
@@ -316,9 +305,138 @@ const RecitationStudio = () => {
       mediaRecorderRef.current.stop()
       setIsRecording(false)
       if (timerRef.current) clearInterval(timerRef.current)
-      toast.success('Recording stopped. Processing...')
-      processRecitation()
+      
+      toast.success('Recording stopped. Processing all ayahs...')
+      
+      const checkBlobAndProcess = () => {
+        if (audioBlobRef.current) {
+          processFullRecitation(audioBlobRef.current)
+        } else {
+          setTimeout(checkBlobAndProcess, 100)
+        }
+      }
+      
+      setTimeout(checkBlobAndProcess, 100)
     }
+  }
+
+  const processFullRecitation = async (blob) => {
+    if (selectedAyahs.length === 0) {
+      toast.error('No ayahs loaded')
+      setIsProcessing(false)
+      return
+    }
+
+    if (!blob) {
+      toast.error('No recording found')
+      setIsProcessing(false)
+      return
+    }
+
+    if (!apiStatus.connected) {
+      toast.error('Whisper API is not available')
+      setIsProcessing(false)
+      return
+    }
+
+    if (!user?.uid) {
+      toast.error('You must be logged in')
+      setIsProcessing(false)
+      return
+    }
+
+    setIsProcessing(true)
+    setRawTranscription('')
+    setPerAyahResults([])
+    setWordMatches([])
+    
+    try {
+      const wavBlob = await convertToWav(blob)
+      
+      // Build the complete expected text
+      const expectedText = selectedAyahs.map(ayah => ayah.text).join(' ')
+      
+      // Send the entire recording for transcription and grading
+      const result = await analyzeRecitationAudio(wavBlob, { text: expectedText })
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Analysis failed')
+      }
+      
+      setRawTranscription(result.transcription)
+      
+      // Process per-ayah results from the enhanced grading engine
+      const processedResults = processPerAyahResults(result, selectedAyahs)
+      setPerAyahResults(processedResults)
+      
+      // Store word matches for detailed highlighting
+      if (result.wordMatches) {
+        setWordMatches(result.wordMatches)
+      }
+      
+      setAnalysisResult({
+        overallScore: result.score,
+        totalScore: result.score,
+        ayahCount: selectedAyahs.length,
+        duration: recordingTime,
+        transcription: result.transcription,
+      })
+      
+      // Save evaluation to Firebase
+      await saveEvaluation({
+        userId: user.uid,
+        ayahNo: selectedAyahs[0].ayahNo,
+        surah: selectedAyahs[0].surah,
+        transcription: result.transcription,
+        score: result.score,
+        creditsUsed: 1,
+        duration: recordingTime,
+        accuracy: result.accuracy,
+        tajweedScore: result.tajweedScore,
+        errors: result.errors,
+        detailedScores: result.detailedScores,
+      })
+      
+      incrementRecitationCount()
+      await checkUserDailyLimit()
+      
+      const pointsText = result.score >= 85 ? 'Excellent!' : result.score >= 50 ? 'Good effort!' : 'Needs practice'
+      toast.success(`Overall Score: ${Math.round(result.score)}% - ${pointsText}`)
+      
+    } catch (error) {
+      console.error('Processing error:', error)
+      toast.error(error.message || 'Failed to process recitation')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  // Helper function to process per-ayah results from the grading engine
+  const processPerAyahResults = (gradingResult, ayahs) => {
+    const results = []
+    
+    for (let i = 0; i < ayahs.length; i++) {
+      const ayah = ayahs[i]
+      // Find errors related to this ayah
+      const ayahErrors = gradingResult.errors?.filter(e => e.ayah === i + 1) || []
+      
+      // Calculate score for this ayah
+      let ayahScore = gradingResult.score
+      if (ayahErrors.length > 0) {
+        const deduction = Math.min(ayahErrors.length * 10, 50)
+        ayahScore = Math.max(0, gradingResult.score - deduction)
+      }
+      
+      results.push({
+        ayahNo: ayah.ayahNo,
+        score: ayahScore,
+        points: ayahScore >= 75 ? 1 : ayahScore >= 50 ? 0.5 : 0,
+        errors: ayahErrors,
+        wordMatches: gradingResult.wordMatches,
+      })
+    }
+    
+    return results
   }
 
   const playAudio = () => {
@@ -341,80 +459,13 @@ const RecitationStudio = () => {
     }
     setAudioBlob(null)
     setAudioUrl(null)
+    audioBlobRef.current = null
     setAnalysisResult(null)
+    setPerAyahResults([])
+    setWordMatches([])
     setRawTranscription('')
     setRecordingTime(0)
     setIsPlaying(false)
-  }
-
-  const processRecitation = async () => {
-    if (!selectedAyah) {
-      toast.error('Please select a verse first')
-      return
-    }
-
-    if (!audioBlob) {
-      toast.error('No recording found')
-      return
-    }
-
-    if (!apiStatus.connected) {
-      toast.error('Whisper API is not available. Please try again later.')
-      return
-    }
-
-    setIsProcessing(true)
-    setRawTranscription('')
-    
-    try {
-      const wavBlob = await convertToWav(audioBlob)
-      const result = await analyzeRecitationAudio(wavBlob, selectedAyah)
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Analysis failed')
-      }
-      
-      setRawTranscription(result.transcription)
-      
-      setAnalysisResult({
-        score: result.score,
-        accuracy: result.accuracy,
-        tajweedScore: result.tajweedScore,
-        matchPercentage: result.matchPercentage,
-        points: result.points,
-        duration: recordingTime,
-        transcription: result.transcription,
-        expectedText: selectedAyah.text || '',
-        errors: result.errors,
-        detailedScores: result.detailedScores,
-      })
-      
-      await saveEvaluation({
-        userId: user?.uid,
-        ayahNo: selectedAyah.ayahNo,
-        surah: selectedAyah.surah,
-        transcription: result.transcription,
-        score: result.score,
-        creditsUsed: 1,
-        duration: recordingTime,
-        accuracy: result.accuracy,
-        tajweedScore: result.tajweedScore,
-        errors: result.errors,
-        detailedScores: result.detailedScores,
-      })
-      
-      incrementRecitationCount()
-      await checkUserDailyLimit()
-      
-      const pointsText = result.points === 1 ? 'Perfect!' : result.points === 0.5 ? 'Good effort!' : 'Needs practice'
-      toast.success(`Score: ${Math.round(result.score)}% - ${pointsText}`)
-      
-    } catch (error) {
-      console.error('Processing error:', error)
-      toast.error(error.message || 'Failed to process recitation')
-    } finally {
-      setIsProcessing(false)
-    }
   }
 
   const convertToWav = async (audioBlob) => {
@@ -502,12 +553,6 @@ const RecitationStudio = () => {
     return '#ef4444'
   }
 
-  const getScoreLabel = (score, points) => {
-    if (points === 1) return 'Excellent - Perfect!'
-    if (points === 0.5) return 'Good - Some improvements needed'
-    return 'Needs Practice'
-  }
-
   const toggleSection = (section) => {
     setExpandedSections(prev => ({
       ...prev,
@@ -515,51 +560,59 @@ const RecitationStudio = () => {
     }))
   }
 
-  const canRecord = !isProcessing && !isRecording && !analysisResult && selectedAyah && dailyLimit.canRecite
+  // Build continuous text for display
+  const continuousText = selectedAyahs.map((ayah, idx) => (
+    <span key={ayah.ayahNo}>
+      <sup style={{ fontSize: '0.7rem', color: '#22c55e', marginRight: '4px', fontWeight: 'bold' }}>{ayah.ayahNo}</sup>
+      {ayah.text}
+      {idx < selectedAyahs.length - 1 && <span style={{ marginRight: '8px' }} />}
+    </span>
+  ))
+
+  const canRecord = !isProcessing && !isRecording && !analysisResult && selectedAyahs.length > 0 && dailyLimit.canRecite
 
   return (
     <Box sx={{ py: 4 }}>
       <Container maxWidth="xl">
         <Box mb={4}>
-          <Box display="flex" alignItems="center" flexWrap="wrap" gap={2}>
-            <Typography variant="h4" gutterBottom fontWeight="bold">
-              Recitation Studio
-            </Typography>
-            {apiStatus.connected && (
-              <Chip label="API Ready" color="success" size="small" icon={<CheckCircle sx={{ fontSize: 14 }} />} />
-            )}
-            {!apiStatus.connected && !apiStatus.checking && (
-              <Chip label="API Offline" color="error" size="small" icon={<ErrorIcon sx={{ fontSize: 14 }} />} />
-            )}
-            {dailyLimit.limit > 0 && (
-              <Chip 
-                label={`${dailyLimit.remaining}/${dailyLimit.limit} remaining`}
-                color={dailyLimit.remaining > 0 ? 'primary' : 'error'}
-                size="small"
-              />
-            )}
+          <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
+            <Box>
+              <Typography variant="h4" gutterBottom fontWeight="bold">
+                Recitation Studio
+              </Typography>
+              <Typography variant="body1" color="text.secondary">
+                Recite {AYAH_CHUNK_SIZE} ayahs continuously, get feedback for all at once
+              </Typography>
+            </Box>
+            <Box display="flex" alignItems="center" gap={2}>
+              {apiStatus.connected && (
+                <Chip label="API Ready" color="success" size="small" icon={<CheckCircle sx={{ fontSize: 14 }} />} />
+              )}
+              {dailyLimit.limit > 0 && (
+                <Chip 
+                  label={`${dailyLimit.remaining}/${dailyLimit.limit} remaining`}
+                  color={dailyLimit.remaining > 0 ? 'primary' : 'error'}
+                  size="small"
+                />
+              )}
+            </Box>
           </Box>
-          <Typography variant="body1" color="text.secondary">
-            Select a surah, navigate to an ayah, record your recitation, and get AI feedback
-          </Typography>
         </Box>
 
         <Grid container spacing={4}>
-          {/* Left Column - Selection & Recording */}
-          <Grid item size={{ xs: 12, md: 6 }}>
+          {/* Left Column - Selection & Controls */}
+          <Grid item size={{ xs: 12, md: 4 }}>
             <Stack spacing={3}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight="bold">Select a Surah</Typography>
+                  <Typography variant="h6" gutterBottom fontWeight="bold">Select Surah & Chunk</Typography>
                   
-                  {/* Surah Selection Dropdown */}
                   <FormControl fullWidth size="medium" sx={{ mb: 3 }}>
                     <InputLabel>Surah</InputLabel>
                     <Select
                       value={selectedSurah?.number || ''}
                       onChange={handleSurahChange}
                       label="Surah"
-                      disabled={!canRecord && !isProcessing}
                     >
                       {surahs.map((surah) => (
                         <MenuItem key={surah.number} value={surah.number}>
@@ -569,50 +622,30 @@ const RecitationStudio = () => {
                     </Select>
                   </FormControl>
 
-                  {/* Ayah Navigation */}
                   {selectedSurah && (
-                    <Box>
-                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
-                        <Typography variant="body2" color="text.secondary">
-                          Surah {selectedSurah.name} has {totalAyahsInSurah} ayahs
-                        </Typography>
-                        <Box>
-                          <IconButton 
-                            onClick={handlePreviousAyah} 
-                            disabled={currentAyahNumber <= 1 || (!canRecord && !isProcessing)}
-                            sx={{ color: '#22c55e' }}
-                          >
-                            <NavigateBefore />
-                          </IconButton>
-                          <Typography variant="body1" component="span" sx={{ mx: 2 }}>
-                            Ayah {currentAyahNumber} / {totalAyahsInSurah}
-                          </Typography>
-                          <IconButton 
-                            onClick={handleNextAyah} 
-                            disabled={currentAyahNumber >= totalAyahsInSurah || (!canRecord && !isProcessing)}
-                            sx={{ color: '#22c55e' }}
-                          >
-                            <NavigateNext />
-                          </IconButton>
-                        </Box>
-                      </Box>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                      <Button 
+                        variant="outlined" 
+                        onClick={handlePreviousChunk}
+                        disabled={chunkStartAyah === 1}
+                        startIcon={<NavigateBefore />}
+                        size="small"
+                      >
+                        Prev
+                      </Button>
+                      <Typography variant="body2" color="text.secondary" align="center">
+                        Ayahs {chunkStartAyah} - {Math.min(chunkStartAyah + AYAH_CHUNK_SIZE - 1, totalAyahsInSurah)}
+                      </Typography>
+                      <Button 
+                        variant="outlined" 
+                        onClick={handleNextChunk}
+                        disabled={chunkStartAyah + AYAH_CHUNK_SIZE - 1 >= totalAyahsInSurah}
+                        endIcon={<NavigateNext />}
+                        size="small"
+                      >
+                        Next
+                      </Button>
                     </Box>
-                  )}
-
-                  {/* Selected Ayah Display */}
-                  {selectedAyah && (
-                    <Fade in={!!selectedAyah}>
-                      <Box mt={3}>
-                        <Paper sx={{ p: 3, bgcolor: alpha(theme.palette.primary.main, 0.05), borderRadius: '12px' }}>
-                          <Typography variant="h5" sx={{ fontFamily: 'Amiri, Noto Naskh Arabic, serif', textAlign: 'right', lineHeight: 1.8, mb: 2 }}>
-                            {selectedAyah.text}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary" textAlign="right">
-                            {selectedSurah?.name} - Ayah {currentAyahNumber}
-                          </Typography>
-                        </Paper>
-                      </Box>
-                    </Fade>
                   )}
                 </CardContent>
               </Card>
@@ -622,7 +655,7 @@ const RecitationStudio = () => {
                 <CardContent>
                   <Typography variant="h6" gutterBottom fontWeight="bold">Recording Studio</Typography>
                   
-                  {!selectedAyah ? (
+                  {selectedAyahs.length === 0 ? (
                     <Alert severity="info">Please select a surah to start reciting</Alert>
                   ) : !dailyLimit.canRecite ? (
                     <Alert severity="warning">
@@ -632,7 +665,25 @@ const RecitationStudio = () => {
                   ) : isProcessing ? (
                     <Box textAlign="center" py={4}>
                       <CircularProgress size={40} />
-                      <Typography variant="body2" color="text.secondary" mt={2}>Processing your recitation with AI...</Typography>
+                      <Typography variant="body2" color="text.secondary" mt={2}>Processing your recitation...</Typography>
+                    </Box>
+                  ) : analysisResult ? (
+                    <Box textAlign="center" py={2}>
+                      <Assessment sx={{ fontSize: 48, color: '#22c55e', mb: 1 }} />
+                      <Typography variant="h5" fontWeight="bold" color="#22c55e">
+                        {Math.round(analysisResult.overallScore)}%
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Overall Score
+                      </Typography>
+                      <Button 
+                        variant="contained" 
+                        sx={{ mt: 2 }}
+                        onClick={resetRecording}
+                        fullWidth
+                      >
+                        Practice This Chunk Again
+                      </Button>
                     </Box>
                   ) : (
                     <>
@@ -641,18 +692,18 @@ const RecitationStudio = () => {
                           {formatTime(recordingTime)}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {isRecording ? 'Recording in progress...' : 'Ready to record'}
+                          {isRecording ? 'Recording in progress...' : 'Ready to record all ayahs'}
                         </Typography>
                       </Box>
 
                       <Stack direction="row" spacing={2} justifyContent="center">
                         {!isRecording && !audioBlob && (
-                          <Button variant="contained" startIcon={<Mic />} onClick={startRecording} size="large">
-                            Start Recording
+                          <Button variant="contained" startIcon={<Mic />} onClick={startRecording} size="large" fullWidth>
+                            Start Recording All Ayahs
                           </Button>
                         )}
                         {isRecording && (
-                          <Button variant="contained" color="error" startIcon={<Stop />} onClick={stopRecording} size="large">
+                          <Button variant="contained" color="error" startIcon={<Stop />} onClick={stopRecording} size="large" fullWidth>
                             Stop Recording
                           </Button>
                         )}
@@ -664,7 +715,7 @@ const RecitationStudio = () => {
                               <Button variant="outlined" startIcon={<Pause />} onClick={pauseAudio} size="large">Pause</Button>
                             )}
                             <Button variant="outlined" startIcon={<Replay />} onClick={resetRecording} size="large">
-                              New Recording
+                              Re-record
                             </Button>
                           </>
                         )}
@@ -678,137 +729,77 @@ const RecitationStudio = () => {
             </Stack>
           </Grid>
 
-          {/* Right Column - Results & Feedback (Same as before) */}
-          <Grid item size={{ xs: 12, md: 6 }}>
+          {/* Right Column - Ayah Display & Results */}
+          <Grid item size={{ xs: 12, md: 8 }}>
             <AnimatePresence mode="wait">
-              {analysisResult ? (
-                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-                  <Card>
-                    <CardContent>
-                      <Accordion 
-                        expanded={expandedSections.apiResponse} 
-                        onChange={() => toggleSection('apiResponse')}
-                        sx={{ mb: 3, bgcolor: alpha('#3b82f6', 0.05) }}
-                      >
-                        <AccordionSummary expandIcon={<ExpandMore />}>
-                          <Box display="flex" alignItems="center" gap={1}>
-                            <Api sx={{ color: '#3b82f6' }} />
-                            <Typography variant="subtitle1" fontWeight="bold">Whisper API Response</Typography>
-                            <Chip label="Raw Output" size="small" color="info" />
-                          </Box>
-                        </AccordionSummary>
-                        <AccordionDetails>
-                          <Paper sx={{ p: 2, bgcolor: alpha('#000', 0.02) }}>
-                            <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                              Transcription from Whisper Model:
-                            </Typography>
-                            <Typography variant="body1" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', bgcolor: '#f5f5f5', p: 1, borderRadius: 1 }}>
-                              {rawTranscription || analysisResult.transcription}
-                            </Typography>
-                            <Divider sx={{ my: 2 }} />
-                            <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                              Expected Text (Quran):
-                            </Typography>
-                            <Typography variant="body1" sx={{ fontFamily: 'Amiri, serif', fontSize: '1.2rem', bgcolor: '#e8f5e9', p: 1, borderRadius: 1 }}>
-                              {analysisResult.expectedText}
-                            </Typography>
-                            <Divider sx={{ my: 2 }} />
-                            <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                              Match Percentage: <strong>{analysisResult.matchPercentage?.toFixed(1)}%</strong>
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              Points Earned: <strong>{analysisResult.points === 1 ? '1 (Full)' : analysisResult.points === 0.5 ? '0.5 (Half)' : '0 (None)'}</strong>
-                            </Typography>
-                          </Paper>
-                        </AccordionDetails>
-                      </Accordion>
-
-                      <Box mb={4}>
-                        <Typography variant="h6" gutterBottom fontWeight="bold">Analysis Results</Typography>
-                        <Grid container spacing={3}>
-                          <Grid item size={{ xs: 12, sm: 4 }}>
-                            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: alpha(getScoreColor(analysisResult.score), 0.1) }}>
-                              <Typography variant="h2" fontWeight="bold" sx={{ color: getScoreColor(analysisResult.score) }}>
-                                {Math.round(analysisResult.score)}%
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">Overall Score</Typography>
-                              <Chip label={getScoreLabel(analysisResult.score, analysisResult.points)} size="small" sx={{ mt: 1, bgcolor: getScoreColor(analysisResult.score), color: 'white' }} />
-                            </Paper>
-                          </Grid>
-                          <Grid item size={{ xs: 12, sm: 4 }}>
-                            <Paper sx={{ p: 2, textAlign: 'center' }}>
-                              <Typography variant="h4" fontWeight="bold" color="#3b82f6">{Math.round(analysisResult.accuracy)}%</Typography>
-                              <Typography variant="body2" color="text.secondary">Accuracy</Typography>
-                            </Paper>
-                          </Grid>
-                          <Grid item size={{ xs: 12, sm: 4 }}>
-                            <Paper sx={{ p: 2, textAlign: 'center' }}>
-                              <Typography variant="h4" fontWeight="bold" color="#8b5cf6">{Math.round(analysisResult.tajweedScore)}%</Typography>
-                              <Typography variant="body2" color="text.secondary">Tajweed Score</Typography>
-                            </Paper>
-                          </Grid>
-                        </Grid>
-                      </Box>
-
-                      <Box mb={3}>
-                        <Typography variant="subtitle1" fontWeight="bold" gutterBottom>Areas for Improvement</Typography>
-                        {analysisResult.errors && analysisResult.errors.length > 0 ? (
-                          <Stack spacing={2} mt={2}>
-                            {analysisResult.errors.map((error, index) => (
-                              <Paper key={index} sx={{ p: 2, borderLeft: `3px solid ${error.wordMatchPercent >= 75 ? '#22c55e' : error.wordMatchPercent >= 50 ? '#f59e0b' : '#ef4444'}` }}>
-                                <Box display="flex" alignItems="center" gap={1} mb={1}>
-                                  {error.wordMatchPercent >= 75 ? (
-                                    <CheckCircle sx={{ color: '#22c55e', fontSize: 20 }} />
-                                  ) : error.wordMatchPercent >= 50 ? (
-                                    <Warning sx={{ color: '#f59e0b', fontSize: 20 }} />
-                                  ) : (
-                                    <ErrorIcon sx={{ color: '#ef4444', fontSize: 20 }} />
-                                  )}
-                                  <Typography variant="subtitle2" fontWeight="bold">{error.word}</Typography>
-                                  <Chip label={`${error.wordMatchPercent}% match`} size="small" sx={{ bgcolor: error.wordMatchPercent >= 75 ? alpha('#22c55e', 0.1) : error.wordMatchPercent >= 50 ? alpha('#f59e0b', 0.1) : alpha('#ef4444', 0.1), color: error.wordMatchPercent >= 75 ? '#22c55e' : error.wordMatchPercent >= 50 ? '#f59e0b' : '#ef4444' }} />
-                                </Box>
-                                <Typography variant="body2" color="text.secondary" mb={0.5}>
-                                  Expected: <span style={{ color: '#22c55e' }}>{error.expected}</span> | Got: <span style={{ color: '#ef4444' }}>{error.actual}</span>
-                                </Typography>
-                                <Typography variant="body2" sx={{ color: '#22c55e' }}>💡 {error.suggestion}</Typography>
-                                <Typography variant="caption" color="text.secondary">📖 Rule: {error.rule}</Typography>
-                              </Paper>
-                            ))}
-                          </Stack>
-                        ) : (
-                          <Box textAlign="center" py={4}>
-                            <CheckCircle sx={{ color: '#22c55e', fontSize: 48, mb: 1 }} />
-                            <Typography color="text.secondary">Perfect recitation! No errors detected.</Typography>
-                          </Box>
-                        )}
-                      </Box>
-
-                      <Stack direction="row" spacing={2}>
-                        <Button variant="contained" startIcon={<Replay />} onClick={resetRecording} fullWidth>Practice Again</Button>
-                        <Button variant="outlined" startIcon={<Download />} onClick={() => {
-                          if (audioBlob) {
-                            const url = URL.createObjectURL(audioBlob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = `recitation_${Date.now()}.webm`
-                            a.click()
-                            URL.revokeObjectURL(url)
-                            toast.success('Recording downloaded')
-                          }
-                        }} fullWidth>Download Recording</Button>
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                </motion.div>
+              {analysisResult && perAyahResults.length > 0 ? (
+                <EvaluationResults 
+                  analysisResult={analysisResult}
+                  perAyahResults={perAyahResults}
+                  rawTranscription={rawTranscription}
+                  selectedAyahs={selectedAyahs}
+                  originalText={selectedAyahs.map(a => a.text).join(' ')}
+                  onPracticeAgain={resetRecording}
+                  onPlayRecording={playAudio}
+                  onDownloadRecording={() => {
+                    if (audioBlob) {
+                      const url = URL.createObjectURL(audioBlob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `recitation_${Date.now()}.webm`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                      toast.success('Recording downloaded')
+                    }
+                  }}
+                  onGenerateAudio={() => setAudioDialogOpen(true)}
+                  onClose={() => {
+                    setAnalysisResult(null)
+                    setPerAyahResults([])
+                    setRawTranscription('')
+                  }}
+                />
               ) : (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  <Card sx={{ height: '100%', minHeight: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <CardContent sx={{ textAlign: 'center' }}>
-                      <RecordVoiceOver sx={{ fontSize: 80, color: alpha(theme.palette.primary.main, 0.3), mb: 2 }} />
-                      <Typography variant="h6" gutterBottom color="text.secondary">Ready to Recite</Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Select a surah, navigate to an ayah, record your recitation, and get AI-powered feedback
-                      </Typography>
+                  <Card sx={{ height: '100%', minHeight: 500 }}>
+                    <CardContent>
+                      <Box 
+                        sx={{ 
+                          p: 4, 
+                          bgcolor: alpha(theme.palette.primary.main, 0.03), 
+                          borderRadius: 3,
+                          minHeight: 400,
+                        }}
+                      >
+                        <Typography 
+                          sx={{ 
+                            fontFamily: 'Amiri, Noto Naskh Arabic, serif',
+                            textAlign: 'right',
+                            lineHeight: 2,
+                            fontSize: { xs: '1rem', sm: '1.3rem', md: '1.6rem' },
+                            direction: 'rtl',
+                          }}
+                        >
+                          {continuousText}
+                        </Typography>
+                        
+                        <Divider sx={{ my: 3 }} />
+                        
+                        <Box textAlign="center" py={2}>
+                          {selectedAyahs.length > 0 && (
+                            <Alert severity="info" sx={{ borderRadius: 2 }}>
+                              <Typography variant="body2">
+                                <strong>Instructions:</strong> Press "Start Recording" and recite <strong>ALL {selectedAyahs.length} ayahs continuously</strong> from beginning to end.
+                              </Typography>
+                            </Alert>
+                          )}
+                          {selectedAyahs.length === 0 && (
+                            <Typography color="text.secondary">
+                              Select a surah and chunk to start practicing
+                            </Typography>
+                          )}
+                        </Box>
+                      </Box>
                     </CardContent>
                   </Card>
                 </motion.div>
@@ -816,29 +807,18 @@ const RecitationStudio = () => {
             </AnimatePresence>
           </Grid>
         </Grid>
-
-        <Box mt={4}>
-          <Card sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom fontWeight="bold">Tips for Best Results</Typography>
-              <Grid container spacing={2}>
-                <Grid item size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Box display="flex" alignItems="center" gap={1}><Mic sx={{ color: '#22c55e' }} /><Typography variant="body2">Use a good quality microphone</Typography></Box>
-                </Grid>
-                <Grid item size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Box display="flex" alignItems="center" gap={1}><Science sx={{ color: '#22c55e' }} /><Typography variant="body2">Recite in a quiet environment</Typography></Box>
-                </Grid>
-                <Grid item size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Box display="flex" alignItems="center" gap={1}><Psychology sx={{ color: '#22c55e' }} /><Typography variant="body2">Practice each verse multiple times</Typography></Box>
-                </Grid>
-                <Grid item size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Box display="flex" alignItems="center" gap={1}><TrendingUp sx={{ color: '#22c55e' }} /><Typography variant="body2">Review feedback and improve</Typography></Box>
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
-        </Box>
       </Container>
+
+      {/* Audio Generator Dialog */}
+      <AudioGeneratorDialog
+        open={audioDialogOpen}
+        onClose={() => setAudioDialogOpen(false)}
+        ayahText={selectedAyahs.map(a => a.text).join(' ')}
+        ayahInfo={{
+          surah: selectedSurah?.name,
+          ayahNo: selectedAyahs.length > 0 ? `${selectedAyahs[0]?.ayahNo}-${selectedAyahs[selectedAyahs.length-1]?.ayahNo}` : ''
+        }}
+      />
     </Box>
   )
 }

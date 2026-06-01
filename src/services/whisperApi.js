@@ -1,88 +1,118 @@
 // src/services/whisperApi.js
 
-import { Client } from '@gradio/client';
+const SPACE_BASE = "https://abaansohail131-qirah-asr.hf.space";
 
-// Your Hugging Face Space URL
-const SPACE_URL = import.meta.env.VITE_SPACE_URL || 'abaansohail131/QuranTranslator';
+const uploadFile = async (audioBlob) => {
+  const audioFile = new File([audioBlob], 'recording.wav', { type: 'audio/wav' });
+  const formData = new FormData();
+  formData.append('files', audioFile);
 
-let clientInstance = null;
+  const response = await fetch(`${SPACE_BASE}/gradio_api/upload`, {
+    method: 'POST',
+    body: formData,
+  });
 
-/**
- * Initialize and get Gradio client instance
- */
-const getClient = async () => {
-  if (!clientInstance) {
-    try {
-      clientInstance = await Client.connect(SPACE_URL);
-      console.log('Gradio client connected successfully');
-    } catch (error) {
-      console.error('Failed to connect to Gradio Space:', error);
-      throw error;
-    }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Upload failed (${response.status}): ${text}`);
   }
-  return clientInstance;
+
+  const result = await response.json();
+  console.log('Upload result:', result);
+
+  // Returns array of path strings in Gradio 5
+  const first = Array.isArray(result) ? result[0] : result;
+  return typeof first === 'string' ? first : (first?.path ?? first?.url);
 };
 
-/**
- * Send audio file to Whisper API for transcription using Gradio client
- * @param {Blob} audioBlob - The audio blob to transcribe
- * @returns {Promise<{success: boolean, transcription: string, error?: string}>}
- */
+const callPredict = async (serverPath) => {
+  // Gradio 5 expects the full FileData object, not just the path string
+  const payload = {
+    data: [{
+      path: serverPath,
+      orig_name: 'recording.wav',
+      mime_type: 'audio/wav',
+      size: null,
+      url: null,
+      is_stream: false,
+      meta: { _type: 'gradio.FileData' },
+    }],
+  };
+
+  const postRes = await fetch(`${SPACE_BASE}/gradio_api/call/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!postRes.ok) {
+    const text = await postRes.text();
+    throw new Error(`Predict POST failed (${postRes.status}): ${text}`);
+  }
+
+  const { event_id } = await postRes.json();
+  console.log('Event ID:', event_id);
+
+  const streamRes = await fetch(`${SPACE_BASE}/gradio_api/call/transcribe/${event_id}`);
+
+  if (!streamRes.ok) {
+    const text = await streamRes.text();
+    throw new Error(`Stream failed (${streamRes.status}): ${text}`);
+  }
+
+  const text = await streamRes.text();
+  console.log('Raw stream:', text);
+
+  // SSE format — find the "complete" event data line
+  const lines = text.split('\n');
+  let lastEventType = null;
+
+  for (const line of lines) {
+    if (line.startsWith('event: ')) {
+      lastEventType = line.slice(7).trim();
+    } else if (line.startsWith('data: ')) {
+      const json = line.slice(6).trim();
+      if (!json || json === 'null') continue;
+
+      if (lastEventType === 'error') {
+        throw new Error(`Server error event: ${json}`);
+      }
+
+      try {
+        const parsed = JSON.parse(json);
+        // Gradio 5 complete event: { data: ["transcription"] }
+        if (parsed?.data?.[0] !== undefined) return parsed.data[0];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
+      } catch {
+        // skip non-JSON lines
+      }
+    }
+  }
+
+  throw new Error(`No transcription in stream. Full response:\n${text}`);
+};
+
 export const transcribeAudio = async (audioBlob) => {
   try {
-    const client = await getClient();
-    
-    // Create a File object from the blob
-    const audioFile = new File([audioBlob], 'recording.wav', { type: 'audio/wav' });
-    
-    // Call the predict endpoint
-    const result = await client.predict("/predict", {
-      audio: audioFile,
-    });
-    
-    // Extract transcription from result (Gradio returns data array)
-    let transcription = '';
-    if (result.data && result.data.length > 0) {
-      transcription = result.data[0];
-    } else if (typeof result === 'string') {
-      transcription = result;
-    } else if (result.text) {
-      transcription = result.text;
-    }
-    
-    console.log('Whisper API response:', { transcription, rawResult: result });
-    
-    return {
-      success: true,
-      transcription: transcription,
-      rawResponse: result,
-    };
+    console.log('Uploading audio...', { size: audioBlob.size, type: audioBlob.type });
+    const serverPath = await uploadFile(audioBlob);
+    console.log('Server path:', serverPath);
+
+    const transcription = await callPredict(serverPath);
+    console.log('Transcription:', transcription);
+
+    return { success: true, transcription };
   } catch (error) {
     console.error('Whisper API error:', error);
-    return {
-      success: false,
-      transcription: '',
-      error: error.message,
-    };
+    return { success: false, transcription: '', error: error.message };
   }
 };
 
-/**
- * Check if Gradio Space is accessible
- */
 export const checkWhisperApiHealth = async () => {
   try {
-    const client = await getClient();
-    return client !== null;
-  } catch (error) {
-    console.error('Whisper API health check failed:', error);
+    const res = await fetch(`${SPACE_BASE}/gradio_api/info`);
+    return res.ok;
+  } catch {
     return false;
   }
-};
-
-/**
- * Reset client instance (useful for reconnection)
- */
-export const resetClient = () => {
-  clientInstance = null;
 };

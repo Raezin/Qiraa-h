@@ -145,7 +145,7 @@ export const createFreeSubscription = async (userId) => {
 
 export const createSubscription = async (userId, type, paymentMethod) => {
   const subscriptionPlans = {
-    basic: { creditsPerDay: 20, price: 9.99, duration: 30 }, // 30 days
+    basic: { creditsPerDay: 5, price: 9.99, duration: 30 }, // 30 days
     pro: { creditsPerDay: 100, price: 19.99, duration: 30 },
     family: { creditsPerDay: 200, price: 29.99, duration: 30 }
   };

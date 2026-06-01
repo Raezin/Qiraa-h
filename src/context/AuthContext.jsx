@@ -31,6 +31,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [isAdmin, setIsAdmin] = useState(false)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -38,9 +39,19 @@ export const AuthProvider = ({ children }) => {
         // Create or update user document
         await createUserDocument(firebaseUser)
         const userData = await getUserData(firebaseUser.uid)
-        setUser({ ...firebaseUser, ...userData })
+        
+        // Check if user is admin based on role field in Firestore
+        const adminStatus = userData?.role === 'admin'
+        setIsAdmin(adminStatus)
+        
+        setUser({ 
+          ...firebaseUser, 
+          ...userData, 
+          role: adminStatus ? 'admin' : 'user' 
+        })
       } else {
         setUser(null)
+        setIsAdmin(false)
       }
       setLoading(false)
     })
@@ -48,14 +59,26 @@ export const AuthProvider = ({ children }) => {
     return () => unsubscribe()
   }, [])
 
-  const login = async (email, password, redirectTo = '/dashboard') => {
+  const login = async (email, password) => {
     setLoading(true)
     setError(null)
     try {
       const result = await signInWithEmailAndPassword(auth, email, password)
+      
+      // Fetch user data to check role
+      const userData = await getUserData(result.user.uid)
+      const isAdminUser = userData?.role === 'admin'
+      
       toast.success('Login successful!')
-      navigate(redirectTo)
-      return { success: true, user: result.user }
+      
+      // Redirect based on role
+      if (isAdminUser) {
+        navigate('/admin/dashboard')
+      } else {
+        navigate('/dashboard')
+      }
+      
+      return { success: true, user: result.user, isAdmin: isAdminUser }
     } catch (err) {
       let errorMessage = 'Login failed. Please try again.'
       switch (err.code) {
@@ -79,14 +102,14 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  const signup = async (email, password, name, redirectTo = '/dashboard') => {
+  const signup = async (email, password, name) => {
     setLoading(true)
     setError(null)
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password)
       await createUserDocument(result.user, { name })
       toast.success('Account created successfully!')
-      navigate(redirectTo)
+      navigate('/dashboard')
       return { success: true, user: result.user }
     } catch (err) {
       let errorMessage = 'Signup failed. Please try again.'
@@ -108,15 +131,27 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  const loginWithGoogle = async (redirectTo = '/dashboard') => {
+  const loginWithGoogle = async () => {
     setLoading(true)
     setError(null)
     try {
       const result = await signInWithPopup(auth, googleProvider)
       await createUserDocument(result.user)
+      
+      // Fetch user data to check role
+      const userData = await getUserData(result.user.uid)
+      const isAdminUser = userData?.role === 'admin'
+      
       toast.success('Google login successful!')
-      navigate(redirectTo)
-      return { success: true, user: result.user }
+      
+      // Redirect based on role
+      if (isAdminUser) {
+        navigate('/admin')
+      } else {
+        navigate('/dashboard')
+      }
+      
+      return { success: true, user: result.user, isAdmin: isAdminUser }
     } catch (err) {
       let errorMessage = 'Google login failed. Please try again.'
       setError(errorMessage)
@@ -127,13 +162,14 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  const logout = async (redirectTo = '/') => {
+  const logout = async () => {
     setLoading(true)
     try {
       await signOut(auth)
       setUser(null)
+      setIsAdmin(false)
       toast.success('Logged out successfully')
-      navigate(redirectTo)
+      navigate('/')
       return { success: true }
     } catch (err) {
       toast.error('Logout failed. Please try again.')
@@ -173,7 +209,8 @@ export const AuthProvider = ({ children }) => {
     loginWithGoogle,
     resetPassword,
     isAuthenticated: !!user,
-    isAdmin: user?.role === 'admin',
+    isAdmin: isAdmin,
+    userRole: user?.role || 'user',
   }
 
   return (

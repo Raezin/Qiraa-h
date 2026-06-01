@@ -1,4 +1,15 @@
+// src/context/SubscriptionContext.jsx
+
 import React, { createContext, useContext, useState, useEffect } from 'react'
+import { useAuth } from './AuthContext'
+import { 
+  getActiveSubscription, 
+  checkDailyLimit, 
+  incrementDailyUsage,
+  createSubscription,
+  deactivateUserSubscriptions
+} from '../services/firebase'
+import toast from 'react-hot-toast'
 
 const SubscriptionContext = createContext()
 
@@ -11,90 +22,144 @@ export const useSubscription = () => {
 }
 
 export const SubscriptionProvider = ({ children }) => {
+  const { user } = useAuth()
   const [subscription, setSubscription] = useState(null)
-  const [usage, setUsage] = useState({
+  const [dailyUsage, setDailyUsage] = useState({
     recitationsToday: 0,
     recitationsThisMonth: 0,
-    limit: 5, // Free tier limit
+    limit: 5,
+    remaining: 5,
+    canRecite: true,
+    subscriptionType: 'free'
   })
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Load subscription from localStorage
-    const savedSubscription = localStorage.getItem('subscription')
-    if (savedSubscription) {
-      setSubscription(JSON.parse(savedSubscription))
+    if (user) {
+      loadSubscriptionData()
+      loadDailyUsage()
+    } else {
+      setLoading(false)
+      setSubscription(null)
     }
-  }, [])
+  }, [user])
 
-  const subscribe = async (planId) => {
+  const loadSubscriptionData = async () => {
+    if (!user) return
+    try {
+      const sub = await getActiveSubscription(user.uid)
+      setSubscription(sub)
+    } catch (error) {
+      console.error('Error loading subscription:', error)
+    }
+  }
+
+  const loadDailyUsage = async () => {
+    if (!user) return
+    try {
+      const limit = await checkDailyLimit(user.uid)
+      setDailyUsage({
+        recitationsToday: limit.used,
+        recitationsThisMonth: limit.used,
+        limit: limit.limit,
+        remaining: limit.remaining,
+        canRecite: limit.canRecite,
+        subscriptionType: limit.subscriptionType
+      })
+    } catch (error) {
+      console.error('Error loading daily usage:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const subscribe = async (planId, paymentMethod = 'credit_card') => {
+    if (!user) {
+      toast.error('You must be logged in to subscribe')
+      return { success: false, error: 'Not logged in' }
+    }
+
     setLoading(true)
     try {
-      // Simulate payment processing
-      await new Promise(resolve => setTimeout(resolve, 1500))
+      // Call Firebase function to create subscription
+      const subscriptionId = await createSubscription(user.uid, planId, paymentMethod)
       
-      const plans = {
-        basic: { name: 'Basic', limit: 50, price: 9.99 },
-        pro: { name: 'Pro', limit: 200, price: 19.99 },
-        unlimited: { name: 'Unlimited', limit: Infinity, price: 49.99 },
-      }
+      // Reload subscription data
+      await loadSubscriptionData()
+      await loadDailyUsage()
       
-      const subscriptionData = {
-        id: Date.now().toString(),
-        plan: plans[planId],
-        startDate: new Date(),
-        endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        status: 'active',
-      }
-      
-      setSubscription(subscriptionData)
-      localStorage.setItem('subscription', JSON.stringify(subscriptionData))
-      return { success: true, subscription: subscriptionData }
-    } catch (err) {
-      return { success: false, error: err.message }
+      toast.success(`Successfully upgraded to ${planId.charAt(0).toUpperCase() + planId.slice(1)} plan!`)
+      return { success: true, subscriptionId }
+    } catch (error) {
+      console.error('Subscription error:', error)
+      toast.error(error.message || 'Subscription failed')
+      return { success: false, error: error.message }
     } finally {
       setLoading(false)
     }
   }
 
   const cancelSubscription = async () => {
+    if (!user) {
+      toast.error('You must be logged in to cancel subscription')
+      return { success: false, error: 'Not logged in' }
+    }
+
     setLoading(true)
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      await deactivateUserSubscriptions(user.uid)
       
-      setSubscription(null)
-      localStorage.removeItem('subscription')
+      // Reload data
+      await loadSubscriptionData()
+      await loadDailyUsage()
+      
+      toast.success('Subscription cancelled successfully')
       return { success: true }
-    } catch (err) {
-      return { success: false, error: err.message }
+    } catch (error) {
+      console.error('Cancellation error:', error)
+      toast.error(error.message || 'Cancellation failed')
+      return { success: false, error: error.message }
     } finally {
       setLoading(false)
     }
   }
 
-  const checkRecitationLimit = () => {
-    const limit = subscription?.plan?.limit || 5
-    return usage.recitationsToday < limit
+  const checkRecitationLimit = async () => {
+    if (!user) return false
+    const limit = await checkDailyLimit(user.uid)
+    setDailyUsage(prev => ({
+      ...prev,
+      remaining: limit.remaining,
+      canRecite: limit.canRecite
+    }))
+    return limit.canRecite
   }
 
-  const incrementRecitationCount = () => {
-    setUsage(prev => ({
-      ...prev,
-      recitationsToday: prev.recitationsToday + 1,
-      recitationsThisMonth: prev.recitationsThisMonth + 1,
-    }))
+  const incrementRecitationCount = async () => {
+    if (!user) return false
+    
+    const currentLimit = await checkDailyLimit(user.uid)
+    if (!currentLimit.canRecite) {
+      toast.error(`You've reached your daily limit of ${currentLimit.limit} recitations. Upgrade to continue practicing!`)
+      return false
+    }
+    
+    await incrementDailyUsage(user.uid, 1)
+    await loadDailyUsage()
+    return true
   }
 
   const value = {
     subscription,
-    usage,
+    dailyUsage,
     loading,
     subscribe,
     cancelSubscription,
     checkRecitationLimit,
     incrementRecitationCount,
-    isSubscribed: !!subscription,
-    remainingRecitations: (subscription?.plan?.limit || 5) - usage.recitationsToday,
+    isSubscribed: subscription?.status === 'active' && subscription?.type !== 'free',
+    remainingRecitations: dailyUsage.remaining,
+    subscriptionType: dailyUsage.subscriptionType,
   }
 
   return (

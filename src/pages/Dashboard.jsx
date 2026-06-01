@@ -64,6 +64,8 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
+import SetAdminButton from '../components/SetAdminButton'
+
 
 const Dashboard = () => {
   const navigate = useNavigate()
@@ -814,9 +816,9 @@ const Dashboard = () => {
                     fullWidth
                     variant="outlined"
                     startIcon={<History />}
-                    onClick={() => navigate('/progress')}
+                    onClick={() => navigate('/profile')}
                   >
-                    View History
+                    View Profile
                   </Button>
                 </Grid>
                 <Grid item size={{ xs: 6, sm: 3 }}>
@@ -824,7 +826,7 @@ const Dashboard = () => {
                     fullWidth
                     variant="outlined"
                     startIcon={<Assessment />}
-                    onClick={() => navigate('/progress')}
+                    onClick={() => navigate('/history')}
                   >
                     Progress Report
                   </Button>
