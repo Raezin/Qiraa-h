@@ -1,3 +1,5 @@
+// src/components/RecitationStudio.jsx
+
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
@@ -320,6 +322,114 @@ const RecitationStudio = () => {
     }
   }
 
+  /**
+   * Process the full recitation and split into per-ayah results
+   */
+  const processPerAyahResults = (gradingResult, ayahs) => {
+    const results = []
+    
+    if (!gradingResult.wordMatches || gradingResult.wordMatches.length === 0) {
+      // Fallback: Create simple per-ayah results without word matching
+      for (let i = 0; i < ayahs.length; i++) {
+        const ayah = ayahs[i]
+        results.push({
+          ayahNo: ayah.ayahNo,
+          score: gradingResult.score,
+          points: gradingResult.score >= 75 ? 1 : gradingResult.score >= 50 ? 0.5 : 0,
+          errors: [],
+          wordMatches: [],
+        })
+      }
+      return results
+    }
+    
+    // Build full expected text and split into words per ayah
+    const ayahWordBoundaries = []
+    let totalWordIndex = 0
+    
+    for (let i = 0; i < ayahs.length; i++) {
+      const ayah = ayahs[i]
+      // Clean the ayah text for word splitting
+      const cleanAyahText = ayah.text
+        .replace(/[ًٌٍَُِّْٰٓٔ]/g, '')
+        .replace(/[اأإآ]/g, 'ا')
+        .replace(/[ؤ]/g, 'و')
+        .replace(/[ئ]/g, 'ي')
+        .replace(/[ة]/g, 'ه')
+      
+      const ayahWords = cleanAyahText.split(/\s+/).filter(w => w.length > 0)
+      
+      ayahWordBoundaries.push({
+        ayahNo: ayah.ayahNo,
+        startIndex: totalWordIndex,
+        endIndex: totalWordIndex + ayahWords.length - 1,
+        wordCount: ayahWords.length,
+        words: ayahWords
+      })
+      
+      totalWordIndex += ayahWords.length
+    }
+    
+    // Distribute word matches to each ayah
+    for (let i = 0; i < ayahs.length; i++) {
+      const ayah = ayahs[i]
+      const boundaries = ayahWordBoundaries[i]
+      
+      // Get matches for this ayah based on expected word indices
+      const ayahMatches = gradingResult.wordMatches.filter(match => {
+        if (match.expectedWord === '[extra]') return false
+        if (match.expectedIndex >= boundaries.startIndex && match.expectedIndex <= boundaries.endIndex) {
+          return true
+        }
+        return false
+      })
+      
+      // Calculate score for this ayah based on its matches
+      let correctCount = 0
+      let totalCount = 0
+      
+      ayahMatches.forEach(match => {
+        if (match.expectedWord !== '[extra]' && match.userWord !== '[missing]') {
+          totalCount++
+          if (match.similarity >= 85) {
+            correctCount += 1
+          } else if (match.similarity >= 70) {
+            correctCount += 0.8
+          } else if (match.similarity >= 60) {
+            correctCount += 0.6
+          }
+        }
+      })
+      
+      // Also count missing words in this ayah
+      const missingInAyah = gradingResult.wordMatches.filter(match => 
+        match.userWord === '[missing]' && 
+        match.expectedIndex >= boundaries.startIndex && 
+        match.expectedIndex <= boundaries.endIndex
+      ).length
+      
+      totalCount += missingInAyah
+      
+      const ayahScore = totalCount > 0 ? (correctCount / totalCount) * 100 : 0
+      
+      // Filter errors for this ayah
+      const ayahErrors = gradingResult.errors?.filter(error => {
+        return boundaries.words.includes(error.word)
+      }) || []
+      
+      results.push({
+        ayahNo: ayah.ayahNo,
+        score: ayahScore,
+        points: ayahScore >= 75 ? 1 : ayahScore >= 50 ? 0.5 : 0,
+        errors: ayahErrors,
+        wordMatches: ayahMatches,
+        userTranscription: '', // Will be filled if needed
+      })
+    }
+    
+    return results
+  }
+
   const processFullRecitation = async (blob) => {
     if (selectedAyahs.length === 0) {
       toast.error('No ayahs loaded')
@@ -363,10 +473,12 @@ const RecitationStudio = () => {
         throw new Error(result.error || 'Analysis failed')
       }
       
+      console.log('Grading result:', result)
       setRawTranscription(result.transcription)
       
       // Process per-ayah results from the enhanced grading engine
       const processedResults = processPerAyahResults(result, selectedAyahs)
+      console.log('Processed per-ayah results:', processedResults)
       setPerAyahResults(processedResults)
       
       // Store word matches for detailed highlighting
@@ -374,8 +486,14 @@ const RecitationStudio = () => {
         setWordMatches(result.wordMatches)
       }
       
+      // Calculate overall score (average of per-ayah scores if available)
+      let overallScore = result.score
+      if (processedResults.length > 0) {
+        overallScore = processedResults.reduce((sum, r) => sum + r.score, 0) / processedResults.length
+      }
+      
       setAnalysisResult({
-        overallScore: result.score,
+        overallScore: overallScore,
         totalScore: result.score,
         ayahCount: selectedAyahs.length,
         duration: recordingTime,
@@ -383,25 +501,31 @@ const RecitationStudio = () => {
       })
       
       // Save evaluation to Firebase
-      await saveEvaluation({
-        userId: user.uid,
-        ayahNo: selectedAyahs[0].ayahNo,
-        surah: selectedAyahs[0].surah,
-        transcription: result.transcription,
-        score: result.score,
-        creditsUsed: 1,
-        duration: recordingTime,
-        accuracy: result.accuracy,
-        tajweedScore: result.tajweedScore,
-        errors: result.errors,
-        detailedScores: result.detailedScores,
-      })
+      // Save evaluation to Firebase
+await saveEvaluation({
+  userId: user.uid,
+  surah: selectedSurah?.name || 'Unknown',
+  surahNumber: selectedSurah?.number || 0,
+  ayahStart: selectedAyahs[0]?.ayahNo || 1,
+  ayahEnd: selectedAyahs[selectedAyahs.length - 1]?.ayahNo || 1,
+  ayahNo: selectedAyahs[0]?.ayahNo || 1, // Add this field with a fallback
+  transcription: result.transcription,
+  score: overallScore,
+  creditsUsed: 1,
+  duration: recordingTime,
+  accuracy: result.accuracy,
+  tajweedScore: result.tajweedScore,
+  errors: result.errors || [],
+  detailedScores: result.detailedScores || {},
+  wordMatches: result.wordMatches || [],
+  timestamp: new Date().toISOString(),
+})
       
       incrementRecitationCount()
       await checkUserDailyLimit()
       
-      const pointsText = result.score >= 85 ? 'Excellent!' : result.score >= 50 ? 'Good effort!' : 'Needs practice'
-      toast.success(`Overall Score: ${Math.round(result.score)}% - ${pointsText}`)
+      const pointsText = overallScore >= 85 ? 'Excellent!' : overallScore >= 50 ? 'Good effort!' : 'Needs practice'
+      toast.success(`Overall Score: ${Math.round(overallScore)}% - ${pointsText}`)
       
     } catch (error) {
       console.error('Processing error:', error)
@@ -409,34 +533,6 @@ const RecitationStudio = () => {
     } finally {
       setIsProcessing(false)
     }
-  }
-
-  // Helper function to process per-ayah results from the grading engine
-  const processPerAyahResults = (gradingResult, ayahs) => {
-    const results = []
-    
-    for (let i = 0; i < ayahs.length; i++) {
-      const ayah = ayahs[i]
-      // Find errors related to this ayah
-      const ayahErrors = gradingResult.errors?.filter(e => e.ayah === i + 1) || []
-      
-      // Calculate score for this ayah
-      let ayahScore = gradingResult.score
-      if (ayahErrors.length > 0) {
-        const deduction = Math.min(ayahErrors.length * 10, 50)
-        ayahScore = Math.max(0, gradingResult.score - deduction)
-      }
-      
-      results.push({
-        ayahNo: ayah.ayahNo,
-        score: ayahScore,
-        points: ayahScore >= 75 ? 1 : ayahScore >= 50 ? 0.5 : 0,
-        errors: ayahErrors,
-        wordMatches: gradingResult.wordMatches,
-      })
-    }
-    
-    return results
   }
 
   const playAudio = () => {
@@ -511,6 +607,12 @@ const RecitationStudio = () => {
     const arrayBuffer = new ArrayBuffer(bufferLength)
     const view = new DataView(arrayBuffer)
     
+    const writeString = (view, offset, str) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i))
+      }
+    }
+    
     writeString(view, 0, 'RIFF')
     view.setUint32(4, bufferLength - 8, true)
     writeString(view, 8, 'WAVE')
@@ -533,12 +635,6 @@ const RecitationStudio = () => {
     }
     
     return new Blob([arrayBuffer], { type: 'audio/wav' })
-  }
-
-  const writeString = (view, offset, str) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i))
-    }
   }
 
   const formatTime = (seconds) => {
@@ -572,16 +668,16 @@ const RecitationStudio = () => {
   const canRecord = !isProcessing && !isRecording && !analysisResult && selectedAyahs.length > 0 && dailyLimit.canRecite
 
   return (
-    <Box sx={{ py: 4 }}>
+    <Box sx={{ py: 4, minHeight: '100vh', bgcolor: 'background.default' }}>
       <Container maxWidth="xl">
         <Box mb={4}>
           <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2}>
             <Box>
-              <Typography variant="h4" gutterBottom fontWeight="bold">
+              <Typography variant="h4" gutterBottom fontWeight="bold" sx={{ background: 'linear-gradient(135deg, #22c55e, #3b82f6)', backgroundClip: 'text', WebkitBackgroundClip: 'text', color: 'transparent' }}>
                 Recitation Studio
               </Typography>
               <Typography variant="body1" color="text.secondary">
-                Recite {AYAH_CHUNK_SIZE} ayahs continuously, get feedback for all at once
+                Recite {AYAH_CHUNK_SIZE} ayahs continuously, get detailed word-by-word feedback
               </Typography>
             </Box>
             <Box display="flex" alignItems="center" gap={2}>
@@ -603,7 +699,7 @@ const RecitationStudio = () => {
           {/* Left Column - Selection & Controls */}
           <Grid item size={{ xs: 12, md: 4 }}>
             <Stack spacing={3}>
-              <Card>
+              <Card elevation={3} sx={{ borderRadius: 3 }}>
                 <CardContent>
                   <Typography variant="h6" gutterBottom fontWeight="bold">Select Surah & Chunk</Typography>
                   
@@ -651,7 +747,7 @@ const RecitationStudio = () => {
               </Card>
 
               {/* Recording Controls */}
-              <Card>
+              <Card elevation={3} sx={{ borderRadius: 3 }}>
                 <CardContent>
                   <Typography variant="h6" gutterBottom fontWeight="bold">Recording Studio</Typography>
                   
@@ -669,8 +765,8 @@ const RecitationStudio = () => {
                     </Box>
                   ) : analysisResult ? (
                     <Box textAlign="center" py={2}>
-                      <Assessment sx={{ fontSize: 48, color: '#22c55e', mb: 1 }} />
-                      <Typography variant="h5" fontWeight="bold" color="#22c55e">
+                      <Assessment sx={{ fontSize: 48, color: getScoreColor(analysisResult.overallScore), mb: 1 }} />
+                      <Typography variant="h5" fontWeight="bold" color={getScoreColor(analysisResult.overallScore)}>
                         {Math.round(analysisResult.overallScore)}%
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
@@ -681,6 +777,7 @@ const RecitationStudio = () => {
                         sx={{ mt: 2 }}
                         onClick={resetRecording}
                         fullWidth
+                        startIcon={<Replay />}
                       >
                         Practice This Chunk Again
                       </Button>
@@ -698,12 +795,26 @@ const RecitationStudio = () => {
 
                       <Stack direction="row" spacing={2} justifyContent="center">
                         {!isRecording && !audioBlob && (
-                          <Button variant="contained" startIcon={<Mic />} onClick={startRecording} size="large" fullWidth>
-                            Start Recording All Ayahs
+                          <Button 
+                            variant="contained" 
+                            startIcon={<Mic />} 
+                            onClick={startRecording} 
+                            size="large" 
+                            fullWidth
+                            sx={{ bgcolor: '#ef4444', '&:hover': { bgcolor: '#dc2626' } }}
+                          >
+                            Start Recording
                           </Button>
                         )}
                         {isRecording && (
-                          <Button variant="contained" color="error" startIcon={<Stop />} onClick={stopRecording} size="large" fullWidth>
+                          <Button 
+                            variant="contained" 
+                            color="error" 
+                            startIcon={<Stop />} 
+                            onClick={stopRecording} 
+                            size="large" 
+                            fullWidth
+                          >
                             Stop Recording
                           </Button>
                         )}
@@ -726,6 +837,19 @@ const RecitationStudio = () => {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Tips Card */}
+              <Card elevation={3} sx={{ borderRadius: 3, bgcolor: alpha('#3b82f6', 0.05) }}>
+                <CardContent>
+                  <Typography variant="subtitle2" fontWeight="bold" gutterBottom>💡 Tips for Best Results</Typography>
+                  <Stack spacing={1}>
+                    <Typography variant="caption" color="text.secondary">• Speak clearly and at a moderate pace</Typography>
+                    <Typography variant="caption" color="text.secondary">• Minimize background noise</Typography>
+                    <Typography variant="caption" color="text.secondary">• Recite all {AYAH_CHUNK_SIZE} ayahs continuously</Typography>
+                    <Typography variant="caption" color="text.secondary">• Hold microphone at a consistent distance</Typography>
+                  </Stack>
+                </CardContent>
+              </Card>
             </Stack>
           </Grid>
 
@@ -738,7 +862,6 @@ const RecitationStudio = () => {
                   perAyahResults={perAyahResults}
                   rawTranscription={rawTranscription}
                   selectedAyahs={selectedAyahs}
-                  originalText={selectedAyahs.map(a => a.text).join(' ')}
                   onPracticeAgain={resetRecording}
                   onPlayRecording={playAudio}
                   onDownloadRecording={() => {
@@ -746,7 +869,7 @@ const RecitationStudio = () => {
                       const url = URL.createObjectURL(audioBlob)
                       const a = document.createElement('a')
                       a.href = url
-                      a.download = `recitation_${Date.now()}.webm`
+                      a.download = `recitation_${selectedSurah?.name}_${Date.now()}.webm`
                       a.click()
                       URL.revokeObjectURL(url)
                       toast.success('Recording downloaded')
@@ -761,7 +884,7 @@ const RecitationStudio = () => {
                 />
               ) : (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  <Card sx={{ height: '100%', minHeight: 500 }}>
+                  <Card elevation={3} sx={{ height: '100%', minHeight: 500, borderRadius: 3 }}>
                     <CardContent>
                       <Box 
                         sx={{ 
@@ -775,7 +898,7 @@ const RecitationStudio = () => {
                           sx={{ 
                             fontFamily: 'Amiri, Noto Naskh Arabic, serif',
                             textAlign: 'right',
-                            lineHeight: 2,
+                            lineHeight: 2.5,
                             fontSize: { xs: '1rem', sm: '1.3rem', md: '1.6rem' },
                             direction: 'rtl',
                           }}
@@ -790,6 +913,7 @@ const RecitationStudio = () => {
                             <Alert severity="info" sx={{ borderRadius: 2 }}>
                               <Typography variant="body2">
                                 <strong>Instructions:</strong> Press "Start Recording" and recite <strong>ALL {selectedAyahs.length} ayahs continuously</strong> from beginning to end.
+                                The system will evaluate your recitation word-by-word.
                               </Typography>
                             </Alert>
                           )}

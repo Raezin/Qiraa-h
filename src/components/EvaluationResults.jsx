@@ -1,6 +1,6 @@
 // src/components/EvaluationResults.jsx
 
-import React from 'react'
+import React, { useState } from 'react'
 import {
   Box,
   Card,
@@ -15,6 +15,16 @@ import {
   useTheme,
   alpha,
   Divider,
+  Tooltip,
+  LinearProgress,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Stack,        // Add this
+  Grid,         // Add this
 } from '@mui/material'
 import {
   CheckCircle,
@@ -27,8 +37,12 @@ import {
   VolumeUp,
   Warning,
   Error as ErrorIcon,
+  TrendingUp,
+  Science,
+  School,
+  EmojiEvents,
 } from '@mui/icons-material'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 
 const EvaluationResults = ({ 
   analysisResult, 
@@ -42,10 +56,12 @@ const EvaluationResults = ({
   onClose
 }) => {
   const theme = useTheme()
+  const [expandedAyah, setExpandedAyah] = useState(null)
 
   const getScoreColor = (score) => {
     if (score >= 85) return '#22c55e'
     if (score >= 70) return '#f59e0b'
+    if (score >= 50) return '#f97316'
     return '#ef4444'
   }
 
@@ -56,41 +72,118 @@ const EvaluationResults = ({
     return 'Needs practice. Review the correct pronunciation.'
   }
 
-  // Get color based on match percentage
-  const getMatchColor = (matchPercent) => {
-    if (matchPercent >= 75) return { bg: '#22c55e', text: 'white' }
-    if (matchPercent >= 50) return { bg: '#f59e0b', text: '#78350f' }
-    return { bg: '#ef4444', text: 'white' }
+  const getScoreGrade = (score) => {
+    if (score >= 90) return 'A+'
+    if (score >= 85) return 'A'
+    if (score >= 80) return 'B+'
+    if (score >= 75) return 'B'
+    if (score >= 70) return 'C+'
+    if (score >= 60) return 'C'
+    if (score >= 50) return 'D'
+    return 'F'
   }
 
-  // Get the user's transcription split into ayahs
-  const getUserAyahs = () => {
-    if (!rawTranscription) return []
-    return rawTranscription.split('ۚ').filter(a => a.trim().length > 0).map(a => a.trim())
+  /**
+   * Clean text for comparison
+   */
+  const cleanText = (text) => {
+    if (!text) return ''
+    return text
+      .replace(/[ًٌٍَُِّْٰٓٔ]/g, '')
+      .replace(/[اأإآ]/g, 'ا')
+      .replace(/[ؤ]/g, 'و')
+      .replace(/[ئ]/g, 'ي')
+      .replace(/[ة]/g, 'ه')
+      .trim()
   }
 
-  const userAyahs = getUserAyahs()
+  /**
+   * Get status icon based on match status
+   */
+  const getStatusIcon = (status, similarity) => {
+    if (status === 'exact' || similarity >= 85) {
+      return <CheckCircle sx={{ fontSize: 14, color: '#22c55e' }} />
+    }
+    if (status === 'good' || similarity >= 70) {
+      return <CheckCircle sx={{ fontSize: 14, color: '#84cc16' }} />
+    }
+    if (status === 'partial' || similarity >= 50) {
+      return <Warning sx={{ fontSize: 14, color: '#f59e0b' }} />
+    }
+    if (status === 'missing') {
+      return <ErrorIcon sx={{ fontSize: 14, color: '#ef4444' }} />
+    }
+    if (status === 'extra') {
+      return <ErrorIcon sx={{ fontSize: 14, color: '#f97316' }} />
+    }
+    return <ErrorIcon sx={{ fontSize: 14, color: '#ef4444' }} />
+  }
 
-  // Updated highlighting function based on match percentage
+  /**
+   * Get background color based on match status
+   */
+  const getWordBackground = (status, similarity) => {
+    if (status === 'exact' || similarity >= 85) {
+      return alpha('#22c55e', 0.15)
+    }
+    if (status === 'good' || similarity >= 70) {
+      return alpha('#84cc16', 0.12)
+    }
+    if (status === 'partial' || similarity >= 50) {
+      return alpha('#f59e0b', 0.12)
+    }
+    if (status === 'missing') {
+      return alpha('#ef4444', 0.12)
+    }
+    if (status === 'extra') {
+      return alpha('#f97316', 0.1)
+    }
+    return alpha('#ef4444', 0.1)
+  }
+
+  /**
+   * Get text color based on match status
+   */
+  const getWordTextColor = (status, similarity) => {
+    if (status === 'exact' || similarity >= 85) return '#166534'
+    if (status === 'good' || similarity >= 70) return '#3f6212'
+    if (status === 'partial' || similarity >= 50) return '#78350f'
+    if (status === 'missing') return '#991b1b'
+    if (status === 'extra') return '#9a3412'
+    return '#991b1b'
+  }
+
+  /**
+   * Highlight individual ayah words with match information
+   */
   const highlightAyahWords = (userAyah, expectedAyah, ayahNumber, matchesData) => {
     if (!expectedAyah) {
       return <span style={{ color: '#ef4444' }}>No reference text</span>
     }
 
-    if (!userAyah) {
-      return <span style={{ color: '#ef4444' }}>No recitation detected</span>
+    if (!userAyah || userAyah.trim().length === 0) {
+      return <span style={{ color: '#ef4444' }}>No recitation detected for this ayah</span>
     }
 
-    // Split into words
-    const userWords = userAyah.split(/\s+/).filter(w => w.length > 0)
-    const expectedWords = expectedAyah.split(/\s+/).filter(w => w.length > 0)
+    // Clean the texts for comparison
+    const cleanExpected = cleanText(expectedAyah)
+    const cleanUser = cleanText(userAyah)
     
-    // Create a map of matches if provided
+    // Split into words
+    const expectedWords = cleanExpected.split(/\s+/).filter(w => w.length > 0)
+    const userWords = cleanUser.split(/\s+/).filter(w => w.length > 0)
+    
+    // Create a map of matches from matchesData
     const matchMap = new Map()
     if (matchesData && matchesData.length) {
       matchesData.forEach(match => {
-        if (match.expectedWord !== '[extra]' && match.userWord !== '[missing]') {
-          matchMap.set(match.expectedWord, match.similarity)
+        if (match.expectedWord && match.expectedWord !== '[extra]') {
+          matchMap.set(match.expectedWord, {
+            similarity: match.similarity || 0,
+            userWord: match.userWord,
+            status: match.status || 'incorrect',
+            isMatch: match.isMatch
+          })
         }
       })
     }
@@ -100,171 +193,260 @@ const EvaluationResults = ({
     // For expected words, show their match status
     for (let i = 0; i < expectedWords.length; i++) {
       const expectedWord = expectedWords[i]
-      const userWord = userWords[i] || '[missing]'
+      const matchInfo = matchMap.get(expectedWord)
+      const userWord = matchInfo?.userWord || userWords[i] || '[missing]'
+      const similarity = matchInfo?.similarity || 0
+      const status = matchInfo?.status || (similarity >= 70 ? 'good' : 'incorrect')
       
-      // Get match percentage if available
-      let matchPercent = matchMap.get(expectedWord) || 0
-      
-      // Calculate simple match if no match data
-      if (matchPercent === 0 && userWord !== '[missing]') {
-        let matches = 0
-        for (let j = 0; j < Math.min(userWord.length, expectedWord.length); j++) {
-          if (userWord[j] === expectedWord[j]) matches++
-        }
-        matchPercent = (matches / Math.max(userWord.length, expectedWord.length)) * 100
-      }
-      
-      const isExactMatch = userWord === expectedWord
-      const isMissing = userWord === '[missing]'
-      
-      let backgroundColor = 'transparent'
-      let textColor = 'inherit'
-      let showCorrection = false
-      let statusIcon = null
-      
-      if (isExactMatch || matchPercent >= 95) {
-        // Perfect match - no styling
-        backgroundColor = 'transparent'
-        textColor = 'inherit'
-        showCorrection = false
-      } else if (matchPercent >= 75) {
-        // Good match - minimal indication
-        backgroundColor = alpha('#22c55e', 0.1)
-        textColor = '#166534'
-        showCorrection = false
-      } else if (matchPercent >= 50) {
-        // Needs improvement - orange highlight
-        backgroundColor = alpha('#f59e0b', 0.15)
-        textColor = '#78350f'
-        showCorrection = true
-        statusIcon = <Warning sx={{ fontSize: 12, color: '#f59e0b', ml: 0.5 }} />
-      } else {
-        // Poor match - red highlight
-        backgroundColor = alpha('#ef4444', 0.15)
-        textColor = '#991b1b'
-        showCorrection = true
-        statusIcon = <ErrorIcon sx={{ fontSize: 12, color: '#ef4444', ml: 0.5 }} />
-      }
-      
-      if (isMissing) {
-        backgroundColor = alpha('#ef4444', 0.15)
-        textColor = '#991b1b'
-        showCorrection = true
-      }
+      const isMissing = userWord === '[missing]' || !userWord
+      const backgroundColor = getWordBackground(status, similarity)
+      const textColor = getWordTextColor(status, similarity)
+      const showCorrection = similarity < 85 && !isMissing && status !== 'exact'
       
       highlightedWords.push(
-        <Box
+        <Tooltip
           key={i}
-          component="span"
-          sx={{
-            display: 'inline-block',
-            marginRight: '8px',
-            marginBottom: '4px',
-            padding: '2px 6px',
-            backgroundColor: backgroundColor,
-            borderRadius: '6px',
-            transition: 'all 0.2s ease',
-            position: 'relative',
-          }}
+          title={
+            <Box sx={{ p: 0.5 }}>
+              <Typography variant="caption" display="block" sx={{ fontWeight: 'bold' }}>
+                Match: {Math.round(similarity)}%
+              </Typography>
+              {showCorrection && (
+                <Typography variant="caption" display="block" sx={{ color: '#22c55e' }}>
+                  Correct: {expectedWord}
+                </Typography>
+              )}
+              {similarity < 70 && similarity > 0 && (
+                <Typography variant="caption" display="block" sx={{ color: '#f59e0b' }}>
+                  You said: {userWord}
+                </Typography>
+              )}
+            </Box>
+          }
+          arrow
+          placement="top"
         >
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Typography
-              component="span"
-              sx={{
-                fontFamily: 'Amiri, Noto Naskh Arabic, serif',
-                fontSize: '1rem',
-                color: textColor,
-                textDecoration: isMissing ? 'underline' : 'none',
-                textDecorationColor: '#ef4444',
-                textDecorationThickness: '1px',
-              }}
-            >
-              {isMissing ? `[${expectedWord}]` : userWord}
-            </Typography>
-            {statusIcon}
+          <Box
+            component="span"
+            sx={{
+              display: 'inline-flex',
+              flexDirection: 'column',
+              marginRight: '8px',
+              marginBottom: '6px',
+              padding: '4px 10px',
+              backgroundColor: backgroundColor,
+              borderRadius: '8px',
+              transition: 'all 0.2s ease',
+              border: similarity >= 85 ? `1px solid ${alpha('#22c55e', 0.3)}` : 'none',
+              cursor: 'pointer',
+              '&:hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              },
+            }}
+          >
+            <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography
+                component="span"
+                sx={{
+                  fontFamily: 'Amiri, Noto Naskh Arabic, serif',
+                  fontSize: '1.1rem',
+                  color: textColor,
+                  textDecoration: isMissing ? 'underline' : 'none',
+                  textDecorationColor: '#ef4444',
+                  textDecorationThickness: '2px',
+                  textDecorationStyle: 'dotted',
+                  fontWeight: similarity >= 85 ? 'bold' : 'normal',
+                }}
+              >
+                {isMissing ? `[${expectedWord}]` : userWord}
+              </Typography>
+              {getStatusIcon(status, similarity)}
+            </Box>
+            
+            {showCorrection && similarity < 85 && similarity >= 50 && (
+              <Typography
+                component="span"
+                sx={{
+                  display: 'block',
+                  fontSize: '0.65rem',
+                  color: '#22c55e',
+                  marginTop: '2px',
+                  textAlign: 'center',
+                  fontWeight: 'bold',
+                }}
+              >
+                ✓ {expectedWord}
+              </Typography>
+            )}
+            
+            {similarity < 50 && similarity > 0 && !isMissing && (
+              <Typography
+                component="span"
+                sx={{
+                  display: 'block',
+                  fontSize: '0.6rem',
+                  color: '#ef4444',
+                  marginTop: '2px',
+                  textAlign: 'center',
+                }}
+              >
+                Needs improvement
+              </Typography>
+            )}
+            
+            {isMissing && (
+              <Typography
+                component="span"
+                sx={{
+                  display: 'block',
+                  fontSize: '0.65rem',
+                  color: '#f59e0b',
+                  marginTop: '2px',
+                  textAlign: 'center',
+                  fontWeight: 'bold',
+                }}
+              >
+                Missing: {expectedWord}
+              </Typography>
+            )}
+            
+            {similarity >= 85 && (
+              <Typography
+                component="span"
+                sx={{
+                  display: 'block',
+                  fontSize: '0.6rem',
+                  color: '#22c55e',
+                  marginTop: '2px',
+                  textAlign: 'center',
+                }}
+              >
+                Perfect!
+              </Typography>
+            )}
           </Box>
-          {showCorrection && !isMissing && userWord !== '[missing]' && (
-            <Typography
-              component="span"
-              sx={{
-                display: 'block',
-                fontSize: '0.6rem',
-                color: '#22c55e',
-                marginTop: '2px',
-                textAlign: 'center',
-              }}
-            >
-              ✓ {expectedWord}
-            </Typography>
-          )}
-          {isMissing && (
-            <Typography
-              component="span"
-              sx={{
-                display: 'block',
-                fontSize: '0.6rem',
-                color: '#f59e0b',
-                marginTop: '2px',
-                textAlign: 'center',
-              }}
-            >
-              Missing
-            </Typography>
-          )}
-        </Box>
+        </Tooltip>
       )
     }
     
-    // Handle extra words at the end
+    // Handle extra words (user said words not in expected text)
     if (userWords.length > expectedWords.length) {
       for (let i = expectedWords.length; i < userWords.length; i++) {
-        highlightedWords.push(
-          <Box
-            key={`extra-${i}`}
-            component="span"
-            sx={{
-              display: 'inline-block',
-              marginRight: '8px',
-              marginBottom: '4px',
-              padding: '2px 6px',
-              backgroundColor: alpha('#ef4444', 0.1),
-              borderRadius: '6px',
-              borderLeft: '2px solid #ef4444',
-            }}
-          >
-            <Typography
-              component="span"
-              sx={{
-                fontFamily: 'Amiri, Noto Naskh Arabic, serif',
-                fontSize: '1rem',
-                color: '#991b1b',
-                textDecoration: 'line-through',
-              }}
+        // Check if this extra word was matched to any expected word
+        let isMatchedExtra = false
+        for (const [_, matchInfo] of matchMap) {
+          if (matchInfo.userWord === userWords[i] && matchInfo.similarity > 50) {
+            isMatchedExtra = true
+            break
+          }
+        }
+        
+        if (!isMatchedExtra) {
+          highlightedWords.push(
+            <Tooltip
+              key={`extra-${i}`}
+              title="Extra word detected. Focus on reciting only the verse text."
+              arrow
+              placement="top"
             >
-              {userWords[i]}
-            </Typography>
-            <Typography
-              component="span"
-              sx={{
-                display: 'block',
-                fontSize: '0.6rem',
-                color: '#ef4444',
-                marginTop: '2px',
-                textAlign: 'center',
-              }}
-            >
-              Extra
-            </Typography>
-          </Box>
-        )
+              <Box
+                component="span"
+                sx={{
+                  display: 'inline-flex',
+                  flexDirection: 'column',
+                  marginRight: '8px',
+                  marginBottom: '6px',
+                  padding: '4px 10px',
+                  backgroundColor: alpha('#ef4444', 0.1),
+                  borderRadius: '8px',
+                  borderLeft: `3px solid #ef4444`,
+                  cursor: 'pointer',
+                }}
+              >
+                <Typography
+                  component="span"
+                  sx={{
+                    fontFamily: 'Amiri, Noto Naskh Arabic, serif',
+                    fontSize: '1.1rem',
+                    color: '#991b1b',
+                    textDecoration: 'line-through',
+                    textDecorationColor: '#ef4444',
+                    textDecorationThickness: '2px',
+                  }}
+                >
+                  {userWords[i]}
+                </Typography>
+                <Typography
+                  component="span"
+                  sx={{
+                    display: 'block',
+                    fontSize: '0.65rem',
+                    color: '#ef4444',
+                    marginTop: '2px',
+                    textAlign: 'center',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  Extra word
+                </Typography>
+              </Box>
+            </Tooltip>
+          )
+        }
       }
     }
     
-    return highlightedWords
+    return highlightedWords.length > 0 ? highlightedWords : (
+      <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+        Unable to process words for this ayah
+      </Typography>
+    )
   }
 
-  // Build full text for audio generation
-  const fullTextForAudio = selectedAyahs.map(ayah => ayah.text).join(' ')
+  /**
+   * Calculate overall statistics
+   */
+  const calculateStatistics = () => {
+    let totalScore = 0
+    let totalPerfectWords = 0
+    let totalGoodWords = 0
+    let totalPartialWords = 0
+    let totalMissingWords = 0
+    let totalExtraWords = 0
+    
+    perAyahResults.forEach(result => {
+      totalScore += result.score
+      
+      if (result.wordMatches) {
+        result.wordMatches.forEach(match => {
+          if (match.status === 'exact' || match.similarity >= 85) totalPerfectWords++
+          else if (match.status === 'good' || match.similarity >= 70) totalGoodWords++
+          else if (match.status === 'partial' || match.similarity >= 50) totalPartialWords++
+          else if (match.userWord === '[missing]') totalMissingWords++
+          else if (match.expectedWord === '[extra]') totalExtraWords++
+        })
+      }
+    })
+    
+    const averageScore = perAyahResults.length > 0 ? totalScore / perAyahResults.length : 0
+    const totalWords = totalPerfectWords + totalGoodWords + totalPartialWords + totalMissingWords
+    
+    return {
+      averageScore,
+      totalPerfectWords,
+      totalGoodWords,
+      totalPartialWords,
+      totalMissingWords,
+      totalExtraWords,
+      totalWords,
+      accuracy: totalWords > 0 ? ((totalPerfectWords + totalGoodWords) / totalWords) * 100 : 0,
+    }
+  }
+
+  const stats = calculateStatistics()
+  const overallScore = analysisResult?.overallScore || 0
+  const scoreColor = getScoreColor(overallScore)
 
   return (
     <motion.div 
@@ -273,14 +455,31 @@ const EvaluationResults = ({
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.3 }}
     >
-      <Card sx={{ position: 'relative', overflow: 'visible', maxHeight: '80vh', overflowY: 'auto' }}>
+      <Card sx={{ 
+        position: 'relative', 
+        overflow: 'visible', 
+        maxHeight: '85vh', 
+        overflowY: 'auto',
+        borderRadius: 4,
+        '&::-webkit-scrollbar': {
+          width: '8px',
+        },
+        '&::-webkit-scrollbar-track': {
+          background: alpha(theme.palette.text.primary, 0.05),
+          borderRadius: '4px',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: alpha(theme.palette.text.primary, 0.2),
+          borderRadius: '4px',
+        },
+      }}>
         <IconButton
           onClick={onClose}
           sx={{
             position: 'absolute',
-            top: 8,
-            right: 8,
-            zIndex: 1,
+            top: 12,
+            right: 12,
+            zIndex: 10,
             bgcolor: alpha(theme.palette.text.primary, 0.1),
             '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.2) },
           }}
@@ -289,66 +488,124 @@ const EvaluationResults = ({
           <Close />
         </IconButton>
 
-        <CardContent sx={{ p: 3 }}>
-          {/* Score Header */}
-          <Box textAlign="center" mb={4}>
-            <Box
-              sx={{
-                width: 120,
-                height: 120,
-                mx: 'auto',
-                mb: 2,
-                borderRadius: '50%',
-                background: `conic-gradient(${getScoreColor(analysisResult.overallScore)} ${analysisResult.overallScore * 3.6}deg, #e2e8f0 0deg)`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-              }}
-            >
+        <CardContent sx={{ p: 4 }}>
+          {/* Score Header with Animation */}
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.2, type: 'spring', stiffness: 200 }}
+          >
+            <Box textAlign="center" mb={4}>
               <Box
                 sx={{
-                  width: 90,
-                  height: 90,
+                  width: 140,
+                  height: 140,
+                  mx: 'auto',
+                  mb: 2,
                   borderRadius: '50%',
-                  bgcolor: 'background.paper',
+                  background: `conic-gradient(${scoreColor} ${overallScore * 3.6}deg, #e2e8f0 0deg)`,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  flexDirection: 'column',
+                  position: 'relative',
+                  boxShadow: `0 0 20px ${alpha(scoreColor, 0.3)}`,
                 }}
               >
-                <Typography variant="h3" fontWeight="bold" sx={{ color: getScoreColor(analysisResult.overallScore) }}>
-                  {Math.round(analysisResult.overallScore)}%
-                </Typography>
+                <Box
+                  sx={{
+                    width: 110,
+                    height: 110,
+                    borderRadius: '50%',
+                    bgcolor: 'background.paper',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
+                  }}
+                >
+                  <Typography variant="h2" fontWeight="bold" sx={{ color: scoreColor, lineHeight: 1 }}>
+                    {Math.round(overallScore)}%
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Grade: {getScoreGrade(overallScore)}
+                  </Typography>
+                </Box>
               </Box>
+              
+              <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ color: scoreColor }}>
+                {getScoreMessage(overallScore)}
+              </Typography>
+              
+              <Typography variant="body2" color="text.secondary">
+                You recited {analysisResult?.ayahCount || selectedAyahs.length} ayahs • {stats.totalWords} words analyzed
+              </Typography>
             </Box>
-            <Typography variant="h6" fontWeight="bold" gutterBottom>
-              {getScoreMessage(analysisResult.overallScore)}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              You recited {analysisResult.ayahCount || selectedAyahs.length} ayahs
-            </Typography>
-          </Box>
+          </motion.div>
 
-          {/* Per Ayah Performance Chips */}
-          <Box mb={4} textAlign="center">
-            <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+          {/* Statistics Cards */}
+          <Grid container spacing={2} sx={{ mb: 4 }}>
+            <Grid item xs={6} sm={3}>
+              <Paper sx={{ p: 2, textAlign: 'center', bgcolor: alpha('#22c55e', 0.05), borderRadius: 2 }}>
+                <EmojiEvents sx={{ color: '#22c55e', fontSize: 28, mb: 0.5 }} />
+                <Typography variant="h6" fontWeight="bold" sx={{ color: '#22c55e' }}>
+                  {stats.totalPerfectWords}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Perfect Words</Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <Paper sx={{ p: 2, textAlign: 'center', bgcolor: alpha('#84cc16', 0.05), borderRadius: 2 }}>
+                <TrendingUp sx={{ color: '#84cc16', fontSize: 28, mb: 0.5 }} />
+                <Typography variant="h6" fontWeight="bold" sx={{ color: '#84cc16' }}>
+                  {stats.totalGoodWords}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Good Words</Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <Paper sx={{ p: 2, textAlign: 'center', bgcolor: alpha('#f59e0b', 0.05), borderRadius: 2 }}>
+                <Science sx={{ color: '#f59e0b', fontSize: 28, mb: 0.5 }} />
+                <Typography variant="h6" fontWeight="bold" sx={{ color: '#f59e0b' }}>
+                  {stats.totalPartialWords}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Needs Work</Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <Paper sx={{ p: 2, textAlign: 'center', bgcolor: alpha('#ef4444', 0.05), borderRadius: 2 }}>
+                <School sx={{ color: '#ef4444', fontSize: 28, mb: 0.5 }} />
+                <Typography variant="h6" fontWeight="bold" sx={{ color: '#ef4444' }}>
+                  {stats.totalMissingWords + stats.totalExtraWords}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Errors</Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+
+          {/* Per Ayah Performance */}
+          <Box mb={4}>
+            <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <TrendingUp sx={{ fontSize: 20 }} />
               Per Ayah Performance
             </Typography>
-            <Box display="flex" gap={1} flexWrap="wrap" justifyContent="center">
+            <Box display="flex" gap={1.5} flexWrap="wrap" justifyContent="center">
               {perAyahResults.map((result, idx) => (
                 <Chip
                   key={idx}
-                  label={`Ayah ${result.ayahNo || idx + 1}: ${Math.round(result.score)}%`}
-                  size="small"
+                  label={`Ayah ${result.ayahNo}: ${Math.round(result.score)}%`}
+                  onClick={() => setExpandedAyah(expandedAyah === idx ? null : idx)}
                   sx={{
-                    bgcolor: getScoreColor(result.score) === '#22c55e' ? alpha('#22c55e', 0.1) : 
-                             getScoreColor(result.score) === '#f59e0b' ? alpha('#f59e0b', 0.1) : 
-                             alpha('#ef4444', 0.1),
+                    bgcolor: alpha(getScoreColor(result.score), 0.1),
                     color: getScoreColor(result.score),
                     fontWeight: 'bold',
+                    fontSize: '0.85rem',
+                    py: 2,
+                    '&:hover': { transform: 'translateY(-2px)' },
+                    transition: 'transform 0.2s',
+                    cursor: 'pointer',
                   }}
+                  icon={getStatusIcon(result.score >= 85 ? 'exact' : result.score >= 70 ? 'good' : 'partial', result.score)}
                 />
               ))}
             </Box>
@@ -357,92 +614,173 @@ const EvaluationResults = ({
           <Divider sx={{ my: 3 }} />
 
           {/* Individual Ayah Comparison */}
-          <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mb: 2 }}>
-            Ayah by Ayah Analysis
+          <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Science sx={{ fontSize: 20 }} />
+            Word by Word Analysis
           </Typography>
 
-          {selectedAyahs.map((ayah, idx) => {
-            const ayahResult = perAyahResults[idx]
-            const userAyah = userAyahs[idx] || ''
-            const ayahScore = ayahResult?.score || 0
-            const ayahColor = getScoreColor(ayahScore)
+          <AnimatePresence>
+            {selectedAyahs.map((ayah, idx) => {
+              const ayahResult = perAyahResults[idx]
+              const userAyah = ayahResult?.userTranscription || ''
+              const ayahScore = ayahResult?.score || 0
+              const ayahColor = getScoreColor(ayahScore)
+              const isExpanded = expandedAyah === idx
 
-            return (
-              <Paper
-                key={idx}
-                sx={{
-                  mb: 3,
-                  p: 2,
-                  borderLeft: `4px solid ${ayahColor}`,
-                  bgcolor: alpha(ayahColor, 0.03),
-                }}
-              >
-                {/* Ayah Header */}
-                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                  <Typography variant="subtitle1" fontWeight="bold">
-                    Ayah {ayah.ayahNo}
-                  </Typography>
-                  <Chip
-                    label={`${Math.round(ayahScore)}%`}
-                    size="small"
-                    sx={{
-                      bgcolor: alpha(ayahColor, 0.1),
-                      color: ayahColor,
-                      fontWeight: 'bold',
-                    }}
-                  />
-                </Box>
-
-                {/* User's Recitation for this Ayah */}
-                <Box mb={2}>
-                  <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                    Your Recitation:
-                  </Typography>
+              return (
+                <motion.div
+                  key={idx}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: idx * 0.1 }}
+                >
                   <Paper
                     sx={{
+                      mb: 3,
                       p: 2,
-                      bgcolor: alpha(theme.palette.background.default, 0.5),
-                      borderRadius: 1,
-                      fontFamily: 'Amiri, Noto Naskh Arabic, serif',
-                      fontSize: '1rem',
-                      lineHeight: 1.8,
-                      direction: 'rtl',
-                      textAlign: 'right',
-                      minHeight: 80,
+                      borderLeft: `4px solid ${ayahColor}`,
+                      bgcolor: alpha(ayahColor, 0.02),
+                      borderRadius: 2,
+                      transition: 'all 0.3s ease',
+                      '&:hover': {
+                        boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+                      },
                     }}
                   >
-                    {highlightAyahWords(userAyah, ayah.text, ayah.ayahNo, ayahResult?.wordMatches)}
-                    {!userAyah && (
-                      <span style={{ color: '#ef4444' }}>No recitation detected for this ayah</span>
-                    )}
-                  </Paper>
-                </Box>
+                    {/* Ayah Header */}
+                    <Box 
+                      display="flex" 
+                      justifyContent="space-between" 
+                      alignItems="center" 
+                      mb={2}
+                      sx={{ cursor: 'pointer' }}
+                      onClick={() => setExpandedAyah(isExpanded ? null : idx)}
+                    >
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Typography variant="subtitle1" fontWeight="bold">
+                          Ayah {ayah.ayahNo}
+                        </Typography>
+                        <Chip
+                          label={`${Math.round(ayahScore)}%`}
+                          size="small"
+                          sx={{
+                            bgcolor: alpha(ayahColor, 0.15),
+                            color: ayahColor,
+                            fontWeight: 'bold',
+                            fontSize: '0.75rem',
+                          }}
+                        />
+                      </Box>
+                      <IconButton size="small">
+                        <ExpandMore sx={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }} />
+                      </IconButton>
+                    </Box>
 
-                {/* Correct Reference for this Ayah */}
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                    Correct Recitation:
-                  </Typography>
-                  <Paper
-                    sx={{
-                      p: 2,
-                      bgcolor: alpha('#22c55e', 0.05),
-                      borderRadius: 1,
-                      fontFamily: 'Amiri, Noto Naskh Arabic, serif',
-                      fontSize: '1rem',
-                      lineHeight: 1.8,
-                      direction: 'rtl',
-                      textAlign: 'right',
-                      border: `1px solid ${alpha('#22c55e', 0.2)}`,
-                    }}
-                  >
-                    <sup style={{ fontSize: '0.7rem', color: '#22c55e', marginRight: '4px' }}>{ayah.ayahNo}</sup>
-                    {ayah.text}
+                    {/* Progress bar for this ayah */}
+                    <LinearProgress 
+                      variant="determinate" 
+                      value={ayahScore} 
+                      sx={{ 
+                        mb: 2, 
+                        height: 6, 
+                        borderRadius: 3,
+                        bgcolor: alpha(ayahColor, 0.2),
+                        '& .MuiLinearProgress-bar': {
+                          bgcolor: ayahColor,
+                          borderRadius: 3,
+                        }
+                      }} 
+                    />
+
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.3 }}
+                        >
+                          {/* User's Recitation for this Ayah */}
+                          <Box mb={3}>
+                            <Typography variant="caption" color="text.secondary" display="block" gutterBottom sx={{ fontWeight: 'bold' }}>
+                              🎙️ Your Recitation:
+                            </Typography>
+                            <Paper
+                              sx={{
+                                p: 2.5,
+                                bgcolor: alpha(theme.palette.background.default, 0.5),
+                                borderRadius: 2,
+                                fontFamily: 'Amiri, Noto Naskh Arabic, serif',
+                                fontSize: '1rem',
+                                lineHeight: 2,
+                                direction: 'rtl',
+                                textAlign: 'right',
+                                minHeight: 100,
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                alignItems: 'center',
+                              }}
+                            >
+                              {highlightAyahWords(userAyah, ayah.text, ayah.ayahNo, ayahResult?.wordMatches)}
+                            </Paper>
+                          </Box>
+
+                          {/* Correct Reference for this Ayah */}
+                          <Box>
+                            <Typography variant="caption" color="text.secondary" display="block" gutterBottom sx={{ fontWeight: 'bold' }}>
+                              📖 Correct Recitation:
+                            </Typography>
+                            <Paper
+                              sx={{
+                                p: 2.5,
+                                bgcolor: alpha('#22c55e', 0.03),
+                                borderRadius: 2,
+                                fontFamily: 'Amiri, Noto Naskh Arabic, serif',
+                                fontSize: '1rem',
+                                lineHeight: 2,
+                                direction: 'rtl',
+                                textAlign: 'right',
+                                border: `1px solid ${alpha('#22c55e', 0.2)}`,
+                              }}
+                            >
+                              <sup style={{ fontSize: '0.7rem', color: '#22c55e', marginRight: '4px', fontWeight: 'bold' }}>{ayah.ayahNo}</sup>
+                              {ayah.text}
+                            </Paper>
+                          </Box>
+
+                          {/* Errors for this ayah */}
+                          {ayahResult?.errors && ayahResult.errors.length > 0 && (
+                            <Box mt={2}>
+                              <Typography variant="caption" color="text.secondary" display="block" gutterBottom sx={{ fontWeight: 'bold' }}>
+                                ⚠️ Suggestions for Improvement:
+                              </Typography>
+                              <Stack spacing={1}>
+                                {ayahResult.errors.slice(0, 5).map((error, errIdx) => (
+                                  <Paper
+                                    key={errIdx}
+                                    sx={{
+                                      p: 1.5,
+                                      bgcolor: alpha('#ef4444', 0.05),
+                                      borderRadius: 1,
+                                      borderLeft: `3px solid ${error.severity === 'high' ? '#ef4444' : '#f59e0b'}`,
+                                    }}
+                                  >
+                                    <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                                      <strong>{error.word}:</strong> {error.suggestion}
+                                    </Typography>
+                                  </Paper>
+                                ))}
+                              </Stack>
+                            </Box>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </Paper>
-                </Box>
-              </Paper>
-            )
-          })}
+                </motion.div>
+              )
+            })}
+          </AnimatePresence>
 
           <Divider sx={{ my: 3 }} />
 
@@ -450,8 +788,9 @@ const EvaluationResults = ({
           <Accordion 
             sx={{ 
               mb: 3, 
-              bgcolor: alpha('#3b82f6', 0.03),
+              bgcolor: alpha('#3b82f6', 0.02),
               '&:before': { display: 'none' },
+              borderRadius: 2,
             }}
             elevation={0}
           >
@@ -459,16 +798,26 @@ const EvaluationResults = ({
               <Box display="flex" alignItems="center" gap={1}>
                 <Api sx={{ color: '#3b82f6', fontSize: 20 }} />
                 <Typography variant="body2" fontWeight="bold">Raw Transcription</Typography>
-                <Chip label="Whisper Output" size="small" variant="outlined" />
+                <Chip label="Whisper API Output" size="small" variant="outlined" />
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Paper sx={{ p: 2, bgcolor: alpha('#000', 0.02) }}>
+              <Paper sx={{ p: 2, bgcolor: alpha('#000', 0.02), borderRadius: 1 }}>
                 <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
                   Complete Transcription from Whisper Model:
                 </Typography>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {rawTranscription}
+                <Typography 
+                  variant="body2" 
+                  sx={{ 
+                    fontFamily: 'monospace', 
+                    wordBreak: 'break-all',
+                    bgcolor: alpha('#000', 0.02),
+                    p: 1.5,
+                    borderRadius: 1,
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  {rawTranscription || 'No transcription available'}
                 </Typography>
               </Paper>
             </AccordionDetails>
